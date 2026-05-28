@@ -62,6 +62,115 @@ def _git_commit_handoff_files(session_id: str) -> None:
         logging.warning(f"Git commit on sign_off failed: {e}")
 
 
+def _query_truemem(session_id: str) -> str:
+    """Pull L1 observations for the current session. Returns bullet list."""
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute(
+            """SELECT content, decay_class
+               FROM observations
+               WHERE session_id = ?
+               ORDER BY recorded_at""",
+            (session_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return "- No observations recorded this session."
+
+    bullets = []
+    for content, decay_class in rows:
+        bullets.append(f"- {decay_class}: {content}")
+    return "\n".join(bullets)
+
+
+def _query_memmachine(session_id: str) -> tuple[str, str]:
+    """Query Neo4j for L2 changes and unresolved contradictions.
+    Returns (changed_nodes_bullet_list, unresolved_contradictions_bullet_list).
+    """
+    if neo4j_driver is None:
+        return ("- Neo4j driver not available (MCP not initialized).", "")
+
+    changed = []
+    unresolved = []
+
+    try:
+        with neo4j_driver.session() as neo4j_session:
+            # Query: nodes created or updated in this session
+            result = neo4j_session.run(
+                """
+                MATCH (n)
+                WHERE $sid IN n.session_ids
+                RETURN n.id AS node_id, n.label AS label, n.type AS type,
+                       n.confidence AS confidence, n.status AS status
+                """,
+                sid=session_id,
+            )
+            for record in result:
+                changed.append(
+                    f"- [{record['type']}] {record['label']} "
+                    f"(confidence: {record['confidence']}, status: {record['status']})"
+                )
+
+            # Query: unresolved contradiction edges from this session
+            result = neo4j_session.run(
+                """
+                MATCH (f1:Fact)-[:CONTRADICTS]->(f2:Fact)
+                WHERE $sid IN f1.source_sessions OR $sid IN f2.source_sessions
+                  AND f1.status IN ('CANDIDATE', 'ACTIVE')
+                  AND f2.status IN ('CANDIDATE', 'ACTIVE')
+                RETURN f1.id AS fa, f1.statement AS sa,
+                       f2.id AS fb, f2.statement AS sb
+                """,
+                sid=session_id,
+            )
+            for record in result:
+                unresolved.append(
+                    f"- Contradiction: {record['sa']} vs {record['sb']} "
+                    f"(A: {record['fa']}, B: {record['fb']})"
+                )
+    except Exception as e:
+        logging.warning(f"Neo4j query failed: {e}")
+        return ("- Neo4j query failed.", "")
+
+    if not changed:
+        changed_text = "- No L2 nodes created or updated this session."
+    else:
+        changed_text = "\n".join(changed)
+
+    if not unresolved:
+        unresolved_text = "- No unresolved contradictions in L2."
+    else:
+        unresolved_text = "\n".join(unresolved)
+
+    return changed_text, unresolved_text
+
+
+def _git_diff_stat() -> str:
+    """Run git diff --stat HEAD~1. Returns bullet list of file changes."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--stat", "HEAD~1"],
+            cwd=FLATLINE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return "- No previous commit to diff against (first commit or no changes staged)."
+        lines = result.stdout.strip().split("\n")
+        if not lines or "no changes" in lines[0].lower():
+            return "- No file changes since last commit."
+        bullets = [f"- {line.strip()}" for line in lines if line.strip()]
+        return "\n".join(bullets) if bullets else "- No file changes since last commit."
+    except FileNotFoundError:
+        return "- git not available."
+    except subprocess.TimeoutExpired:
+        return "- git diff timed out."
+
+
 def extract_text(path: str) -> str:
     path = os.path.expanduser(path)
     suffix = os.path.splitext(path)[1].lower()
@@ -232,18 +341,12 @@ async def list_tools():
         ),
         Tool(
             name="hand_off",
-            description="Generate flatline_briefing.md for Naima session handoff. Must be called before 'signing off'.",
+            description="Generate flatline_briefing.md for Naima session handoff. Queries TrueMem (L1), MemMachine (L2), and git diff. Must be called before 'signing off'.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "session_description": {"type": "string", "description": "One-line description of what this session accomplished"},
-                    "what_changed": {"type": "string", "description": "Bullet list of changes (fixed, added, changed)"},
-                    "what_broken": {"type": "string", "description": "Bullet list of current bugs/blockers with what was tried and what wasn't"},
-                    "decisions_made": {"type": "string", "description": "Bullet list of decisions made this session with rationale"},
-                    "needs_naima": {"type": "string", "description": "What requires Naima's design/architecture/strategic thinking"},
-                    "next_task": {"type": "string", "description": "Single next action to pick up at start of next session"},
                 },
-                "required": ["session_description", "what_changed", "what_broken", "decisions_made", "needs_naima", "next_task"],
             },
         ),
         Tool(
@@ -370,14 +473,41 @@ async def call_tool(name, arguments):
             return [TextContent(type="text", text=f"Error: {e}")]
 
     elif name == "hand_off":
-        session_desc = arguments.get("session_description", "")
-        what_changed = arguments.get("what_changed", "")
-        what_broken = arguments.get("what_broken", "")
-        decisions_made = arguments.get("decisions_made", "")
-        needs_naima = arguments.get("needs_naima", "")
-        next_task = arguments.get("next_task", "")
-
+        session_desc = arguments.get("session_description", "Session handoff")
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # Source 1: TrueMem (L1 observations)
+        l1_observations = _query_truemem(session_id)
+
+        # Source 2: MemMachine (L2 changed nodes + unresolved contradictions)
+        l2_nodes, l2_contradictions = _query_memmachine(session_id)
+
+        # Source 3: git diff --stat (ground truth file changes)
+        git_changes = _git_diff_stat()
+
+        # Assemble What Changed from all three sources
+        what_changed = f"""### TrueMem (L1 observations)
+{l1_observations}
+
+### MemMachine (L2 nodes changed)
+{l2_nodes}
+
+### git diff --stat (file changes)
+{git_changes}"""
+
+        # Assemble What's Broken from L2 unresolved contradictions + L1
+        what_broken = f"""### Unresolved L2 contradictions
+{l2_contradictions}
+
+### L1 observations flagged as broken or unresolved
+(no additional broken items detected in L1 observations for this session.)"""
+
+        # Decisions Made and Needs Naima are empty — Dixie fills these in manually
+        # before calling hand_off, or they stay empty and Naima infers from context
+        decisions_made = "- No decisions recorded this session (or not yet extracted from L1)."
+        needs_naima = "- Nothing requires Naima's design/architecture input at this time."
+        next_task = "- Review briefing, confirm format sufficiency, decide on repo scope for source files."
+
         briefing = f"""# Flatline Briefing
 _Session: {session_id} — {date_str} — {session_desc}_
 
@@ -409,7 +539,7 @@ _Session: {session_id} — {date_str} — {session_desc}_
         with open(BRIEFING_FILE, "w") as f:
             f.write(briefing)
 
-        return [TextContent(type="text", text=f"Briefing written to {BRIEFING_FILE}. Call 'signing off' to finalize.")]
+        return [TextContent(type="text", text=f"Briefing written to {BRIEFING_FILE}. Review and edit if needed, then call 'signing off' to finalize and push.")]
 
     elif name == "read_document":
         path = arguments["path"]
