@@ -1,0 +1,10 @@
+flatline.db
+*.db
+*.db-shm
+*.db-wal
+logs/
+__pycache__/
+*.pyc
+.env
+*.log
+graphify-out/
