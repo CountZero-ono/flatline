@@ -59,7 +59,7 @@ Human memory works because of consolidation: the brain moves things from short-t
 |---------|-----------|--------|
 | MemMachine (Neo4j + Postgres) | 192.168.1.53:8080 | Healthy (LXC 106) |
 | Portainer UI | 192.168.1.53:9443 | — |
-| Qdrant 1.17.1 | 192.168.1.84:6333 | Healthy |
+| Qdrant 1.17.1 | 192.168.1.44:6333 | Healthy |
 
 **llama.cpp (llama-server) on SER7 — serves both inference and embedding models**
 
@@ -461,7 +461,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | `flatline_l3_ingest.py` | Ingestion: `chunk_text()`, `stable_id()`, `ingest_text()`, `ingest_file()` |
 | `flatline_l3_query.py` | Query: `embed()`, `ensure_collection()`, `search()`, `gap_search()`, `upsert_chunk()` |
 
-- Qdrant 1.17.1 at 192.168.1.84:6333
+- Qdrant 1.17.1 at 192.168.1.44:6333
 - Granite-embedding-97M serving 384-dim Cosine vectors (port 1236)
 - Test data (4 Asian Pickles chunks) verified working
 - CHUNK_SIZE=500, OVERLAP=50, md5 stable IDs
@@ -591,7 +591,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | `~/logs/flatline-crystallize.log` | Crystallization run log |
 | `192.168.1.53:8080` | MemMachine MCP endpoint |
 | `192.168.1.53:9443` | Portainer UI |
-| `192.168.1.84:6333` | Qdrant server |
+| `192.168.1.44:6333` | Qdrant server |
 | `192.168.1.112:1235` | llama-server Qwen3.6 inference |
 | `192.168.1.112:1236` | llama-server Granite embedding |
 | `192.168.1.112:1237` | llama-server Granite Micro |
