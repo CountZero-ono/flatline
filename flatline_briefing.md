@@ -1,5 +1,5 @@
 # Flatline Briefing
-_Session: 528d9067-5be7-4962-9ed1-9e1a184c41ff — 2026-05-30 — Updated flatline_summary.md with MTP session documentation_
+_Session: 3b05c0cb-ee48-4fa7-8a27-2c1d00579deb — 2026-05-30 — Updated flatline_summary.md with MTP session documentation and renamed session to "MTP speculative decoding integration"_
 
 ---
 
@@ -11,11 +11,11 @@ _Session: 528d9067-5be7-4962-9ed1-9e1a184c41ff — 2026-05-30 — Updated flatli
 - Neo4j query failed.
 
 ### git diff --stat (file changes)
-- flatline_decisions.md   | 38 +++++++++++++++++++-------------------
+- flatline_briefing.md    |  9 ++++++---
 - flatline_decisionsPi.md | 38 +++++++++++++++++++-------------------
 - flatline_l3_query.py    |  2 +-
-- flatline_summary.md     | 21 +++++++++++++++------
-- 4 files changed, 54 insertions(+), 45 deletions(-)
+- flatline_summary.md     | 15 ++++++++++++---
+- 4 files changed, 38 insertions(+), 26 deletions(-)
 
 ---
 
