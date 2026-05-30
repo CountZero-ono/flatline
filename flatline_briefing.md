@@ -1,5 +1,5 @@
 # Flatline Briefing
-_Session: e476c9b6-762f-4101-a4d2-8450ee21452f — 2026-05-28 — GitHub handoff pipeline wired. Repo CountZero-ono/flatline live with 3 commits. hand_off tool queries TrueMem (L1), MemMachine (L2), and git diff to generate flatline_briefing.md. sign_off auto-commits all 3 files. graphify installed and documented._
+_Session: 528d9067-5be7-4962-9ed1-9e1a184c41ff — 2026-05-30 — Updated flatline_summary.md with MTP session documentation_
 
 ---
 
@@ -11,8 +11,11 @@ _Session: e476c9b6-762f-4101-a4d2-8450ee21452f — 2026-05-28 — GitHub handoff
 - Neo4j query failed.
 
 ### git diff --stat (file changes)
-- flatline_mcp_server.py | 160 ++++++++++++++++++++++++++++++++++++++++++++-----
-- 1 file changed, 145 insertions(+), 15 deletions(-)
+- flatline_decisions.md   | 38 +++++++++++++++++++-------------------
+- flatline_decisionsPi.md | 38 +++++++++++++++++++-------------------
+- flatline_l3_query.py    |  2 +-
+- flatline_summary.md     | 21 +++++++++++++++------
+- 4 files changed, 54 insertions(+), 45 deletions(-)
 
 ---
 

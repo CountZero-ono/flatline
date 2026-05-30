@@ -22,6 +22,13 @@ The system is also named "Flatline" because the flatline is where memory begins 
 
 | Date | Change |
 |------|--------|
+| May 2026 | Built llama-cpp-mainline alongside turboquant (separate binary, no conflict) |
+| May 2026 | Created `llama-qwen-mtp.service` on port 1235 with MTP draft speculative decoding (`--spec-type draft-mtp --spec-draft-n-max 2`) |
+| May 2026 | Turboquant parked on 1239, disabled — service file intact if needed |
+| May 2026 | Updated agent configs (`generic.md`, `dixie.md`) to `qwen3.6-35b-a3b-mtp@q3_k_m` |
+| May 2026 | Fixed `GameMode.sh` to stop/start the MTP service instead of the old llama-qwen |
+| May 2026 | Enabled `llama-qwen-mtp` to autostart on boot |
+| May 2026 | Confirmed 83% draft acceptance rate, ~30 tok/s on code tasks |
 | May 2026 | Added `memmachine` remote MCP entry to `~/.opencode/opencode.json` (`http://192.168.1.53:8080/mcp/`) |
 | May 2026 | Migrating MemMachine IP from `192.168.1.208` → `192.168.1.53` |
 | May 2026 | `AGENTS.md` updated: `new session` command now writes session UUID to `~/.flatline/current_session` |
@@ -65,7 +72,8 @@ Human memory works because of consolidation: the brain moves things from short-t
 
 | Model | Port | Service | Details |
 |-------|------|---------|---------|
-| Qwen3.6 35B A3B Q3_K_M | 1235 | `llama-qwen.service` | Primary inference, context 98304, KV q8_0/q8_0, flash-attn, kv-unified, batch 512/512 |
+| Qwen3.6 35B A3B Q3_K_M (MTP) | 1235 | `llama-qwen-mtp.service` | Primary inference, context 98304, KV q8_0/q8_0, flash-attn, kv-unified, batch 512/512, **draft speculative decoding** (`--spec-type draft-mtp --spec-draft-n-max 2`), 83% acceptance, ~30 tok/s |
+| llama-cpp-mainline (turboquant) | 1239 | `llama-turboquant.service` | Parked, disabled — service file intact if needed |
 | Granite-embedding-97M-multilingual-r2-Q8_0 | 1236 | `llama-granite.service` | L3 embeddings, 384-dim, Cosine distance |
 | Granite-4.0-H-Micro Q4_K_M | 1237 | — | Context 8192 |
 | Qwen3.6 27B Q3_K_S | 1238 | `llama-crystallizer.service` | Crystallizer, registered |
@@ -149,7 +157,7 @@ The core pipeline. Async, unattended, self-maintaining. Triggered by `signing ou
 
 | Role | Model | Config |
 |------|-------|--------|
-| Interactive / Agentic | Qwen3.6 35B A3B Q3_K_M | Vulkan, 16GB UMA, ctx 98304, thinking ON |
+| Interactive / Agentic | Qwen3.6 35B A3B Q3_K_M (MTP) | Vulkan, 16GB UMA, ctx 98304, thinking ON, **draft speculative decoding** (`--spec-type draft-mtp --spec-draft-n-max 2`), 83% acceptance, ~30 tok/s |
 | Crystallizer | Qwen3.6 27B Q3_K_S | Async, unattended, thinking ON, no time constraint |
 
 ### Command Vocabulary
@@ -384,6 +392,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 
 | Decision | Rationale | Status |
 |----------|-----------|--------|
+| MTP draft speculative decoding (draft-mtp, n=2) | 83% draft acceptance rate, ~30 tok/s on code tasks vs ~27 t/s baseline | VALIDATED |
 | Vulkan over ROCm | ROCm causes swap hell on 780M, Vulkan stable at 27 t/s | VALIDATED |
 | 16GB UMA in BIOS | Max the hardware supports. Single biggest performance unlock. | VALIDATED |
 | ctx 98304 over 24576 | OpenCode hits context limits on real workloads. 1-2 t/s cost is worth it. | VALIDATED |
@@ -595,7 +604,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | `192.168.1.112:1235` | llama-server Qwen3.6 inference |
 | `192.168.1.112:1236` | llama-server Granite embedding |
 | `192.168.1.112:1237` | llama-server Granite Micro |
-| `localhost:1235` | llama-qwen.service (Qwen3.6 35B inference, port 1235) |
+| `localhost:1235` | llama-qwen-mtp.service (Qwen3.6 35B MTP inference, port 1235, draft spec decoding) |
 | `localhost:1238` | llama-crystallizer.service (Qwen3.6 27B crystallizer, port 1238) |
 
 ---
