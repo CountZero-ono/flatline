@@ -484,6 +484,7 @@ async def list_tools():
 
 @server.call_tool()
 async def call_tool(name, arguments):
+    global neo4j_driver
     session_id = load_or_create_session()
 
     if name == "remember_this":
