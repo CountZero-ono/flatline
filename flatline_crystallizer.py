@@ -242,11 +242,11 @@ def embed_facts(facts, session_id):
     return count
 
 
-def crystallize_session(db_path, neo4j_session, session_id, user_annotation=None):
+def crystallize_session(db_path, neo4j_session, session_id, user_annotation=None, url=None):
     """Orchestrates the full crystallization pipeline."""
     l1_content = get_l1_observations(db_path, session_id)
     l2_context = get_l2_subgraph(neo4j_session, session_id)
-    result = call_crystallizer(l1_content, l2_context, user_annotation)
+    result = call_crystallizer(l1_content, l2_context, user_annotation, url=url)
 
     entities = result.get("entities", [])
     facts = result.get("facts", [])
