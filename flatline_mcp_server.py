@@ -1,9 +1,8 @@
 import os
 import json
 import logging
-import socket
 import subprocess
-import time
+import threading
 import requests
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -578,105 +577,49 @@ async def call_tool(name, arguments):
                 + "\n".join(conflict_lines)
             ))]
 
-        # Step 4: crystallize synchronously
-        #   Stop llama-qwen-mtp, start llama-server on port 1235 with
-        #   thinking disabled, call crystallize_session(), then restart.
-        MODEL_PATH = (
-            "/mnt/Models/LM Models/unsloth/"
-            "Qwen3.6-35B-A3B-MTP-GGUF/"
-            "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
-        )
-        LLAMA_SERVER = "/home/fuad/llama-cpp-mainline/build/bin/llama-server"
-        CRYSTALLIZE_URL = "http://localhost:1235/v1/chat/completions"
+        # Step 4: crystallize in background thread
+        CRYSTALLIZATION_RESULT_PATH = os.path.expanduser("~/.flatline/last_crystallization.json")
 
-        # 4a: stop llama-qwen-mtp
-        subprocess.run(
-            ["systemctl", "--user", "stop", "llama-qwen-mtp.service"],
-            check=True, capture_output=True, text=True,
-        )
-
-        # 4b: wait for port 1235 to close
-        for _ in range(24):
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            ready = s.connect_ex(("localhost", 1235))
-            s.close()
-            if ready != 0:
-                break
-            time.sleep(5)
-        else:
-            return [TextContent(type="text", text="sign_off failed: port 1235 did not close after stopping llama-qwen-mtp.")]
-
-        # 4c: start llama-server with thinking disabled
-        start_cmd = [
-            LLAMA_SERVER,
-            "-m", MODEL_PATH,
-            "-ngl", "999", "-c", "65536", "-np", "1",
-            "--cache-type-k", "q8_0",
-            "--cache-type-v", "q8_0",
-            "--host", "0.0.0.0", "--port", "1235",
-            "--batch-size", "1024", "--ubatch-size", "512",
-            "--alias", "qwen3.6-35b-a3b-mtp@q3_k_m",
-            "--temp", "0.6",
-            "--top-k", "20", "--top-p", "0.95", "--min-p", "0.0",
-            "--flash-attn", "on",
-            "--cont-batching",
-            "--reasoning-budget", "0",
-            "--spec-type", "draft-mtp",
-            "--spec-draft-n-max", "2",
-        ]
-        _server_proc = subprocess.Popen(start_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-        # 4d: wait for port 1235 to respond
-        for _ in range(36):
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            ready = s.connect_ex(("localhost", 1235))
-            s.close()
-            if ready == 0:
-                break
-            time.sleep(5)
-        else:
-            _server_proc.terminate()
-            subprocess.run(
-                ["systemctl", "--user", "start", "llama-qwen-mtp.service"],
-                check=True, capture_output=True, text=True,
-            )
-            return [TextContent(type="text", text="sign_off failed: llama-server did not start on port 1235.")]
-
-        # 4e: call crystallize_session (reads L1, L2, POSTs to model, writes Neo4j/Qdrant)
-        from neo4j import GraphDatabase, Auth
-        neo4j_driver = GraphDatabase.driver(
-            "bolt://192.168.1.53:7687",
-            auth=Auth("basic", "neo4j", "neo4j_password"),
-        )
-        try:
-            with neo4j_driver.session() as neo4j_session:
-                result = crystallize_session(
-                    DB_PATH, neo4j_session, session_id,
-                    user_annotation=annotation,
-                    url=CRYSTALLIZE_URL,
+        def _crystallize_and_commit(sid, annot, out_path):
+            result = {"status": "success", "entities": 0, "facts": 0}
+            try:
+                from neo4j import GraphDatabase, Auth
+                _driver = GraphDatabase.driver(
+                    "bolt://192.168.1.53:7687",
+                    auth=Auth("basic", "neo4j", "neo4j_password"),
                 )
-        finally:
-            neo4j_driver.close()
+                try:
+                    with _driver.session() as _session:
+                        _result = crystallize_session(
+                            DB_PATH, _session, sid,
+                            user_annotation=annot,
+                            url="http://localhost:1235/v1/chat/completions",
+                        )
+                        result["entities"] = _result.get("entities", 0)
+                        result["facts"] = _result.get("facts", 0)
+                finally:
+                    _driver.close()
 
-        # 4f: stop llama-server, restart llama-qwen-mtp
-        _server_proc.terminate()
-        _server_proc.wait(timeout=30)
-        subprocess.run(
-            ["systemctl", "--user", "start", "llama-qwen-mtp.service"],
-            check=True, capture_output=True, text=True,
+                _git_commit_handoff_files(sid)
+            except Exception as e:
+                result["status"] = "failure"
+                result["error"] = str(e)
+                logging.exception("Crystallization failed")
+
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "w") as f:
+                json.dump(result, f, indent=2)
+
+        crystallization_thread = threading.Thread(
+            target=_crystallize_and_commit,
+            args=(session_id, annotation, CRYSTALLIZATION_RESULT_PATH),
+            daemon=True,
         )
-
-        # Step 5: commit handoff files to local git, then push to GitHub
-        _git_commit_handoff_files(session_id)
+        crystallization_thread.start()
 
         return [TextContent(
             type="text",
-            text=(
-                f"Session captured. Crystallized: "
-                f"{result.get('entities', '0')} entities, "
-                f"{result.get('facts', '0')} facts. "
-                f"Handoff committed and pushed."
-            ),
+            text="Session closed. Crystallizing in background — check ~/.flatline/last_crystallization.json for result.",
         )]
 
     elif name == "hand_off":
