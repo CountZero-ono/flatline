@@ -1,5 +1,5 @@
 # Flatline Briefing
-_Session: 3b05c0cb-ee48-4fa7-8a27-2c1d00579deb — 2026-05-30 — Updated flatline_summary.md with MTP session documentation and renamed session to "MTP speculative decoding integration"_
+_Session: 66050616-fb23-4c3e-af53-4405bc1b6ce0 — 2026-06-03 — Set up llama-pi.service (Qwen 3.5 9B MTP, port 1239), pi-launch.sh, Pi agent config, and SUPER SHIFT+P keybinding; noted flatline deployment reverted to service-based startup_
 
 ---
 
@@ -11,11 +11,14 @@ _Session: 3b05c0cb-ee48-4fa7-8a27-2c1d00579deb — 2026-05-30 — Updated flatli
 - Neo4j query failed.
 
 ### git diff --stat (file changes)
-- flatline_briefing.md    |  9 ++++++---
-- flatline_decisionsPi.md | 38 +++++++++++++++++++-------------------
-- flatline_l3_query.py    |  2 +-
-- flatline_summary.md     | 15 ++++++++++++---
-- 4 files changed, 38 insertions(+), 26 deletions(-)
+- AGENTS.md                   |  27 ++--
+- flatline_briefing.md        |  15 ++-
+- flatline_crystallize_run.sh |   6 +-
+- flatline_decisionsPi.md     |  38 +++---
+- flatline_l3_query.py        |   2 +-
+- flatline_mcp_server.py      | 302 ++++++++++++++++++++++++++++++--------------
+- flatline_summary.md         |  39 ++++--
+- 7 files changed, 286 insertions(+), 143 deletions(-)
 
 ---
 

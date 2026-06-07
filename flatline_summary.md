@@ -24,15 +24,20 @@ The system is also named "Flatline" because the flatline is where memory begins 
 |------|--------|
 | May 2026 | Built llama-cpp-mainline alongside turboquant (separate binary, no conflict) |
 | May 2026 | Created `llama-qwen-mtp.service` on port 1235 with MTP draft speculative decoding (`--spec-type draft-mtp --spec-draft-n-max 2`) |
-| May 2026 | Turboquant parked on 1239, disabled — service file intact if needed |
+| Jun 2026 | Turboquant fully retired — all services migrated to llama-cpp-mainline binary, turboquant no longer in use |
 | May 2026 | Updated agent configs (`generic.md`, `dixie.md`) to `qwen3.6-35b-a3b-mtp@q3_k_m` |
 | May 2026 | Fixed `GameMode.sh` to stop/start the MTP service instead of the old llama-qwen |
 | May 2026 | Enabled `llama-qwen-mtp` to autostart on boot |
 | May 2026 | Confirmed 83% draft acceptance rate, ~30 tok/s on code tasks |
+| May 2026 | `hand_off` MCP tool implemented in `flatline_mcp_server.py` — queries TrueMem (L1), MemMachine (L2), git diff; writes `flatline_briefing.md` for Naima session handoff |
+| May 2026 | Fixed `hand_off` tool description — no longer auto-calls `signing off`; waits for explicit user instruction instead |
 | May 2026 | Added `memmachine` remote MCP entry to `~/.opencode/opencode.json` (`http://192.168.1.53:8080/mcp/`) |
 | May 2026 | Migrating MemMachine IP from `192.168.1.208` → `192.168.1.53` |
-| May 2026 | `AGENTS.md` updated: `new session` command now writes session UUID to `~/.flatline/current_session` |
+| May 2026 | `sign_off` observation extraction moved to client-side — Dixie extracts from conversation context before calling MCP tool |
+| May 2026 | `AGENTS.md` updated: `new session` command removed; `signing off` now creates its own session |
 | May 2026 | Installed `graphify` Opencode skill — converts any folder of files into a navigable knowledge graph with community detection, persistent graph storage, and an honest audit trail (EXTRACTED / INFERRED / AMBIGUOUS edges) |
+| May 2026 | Added pre-crystallization cleanup: `flatline_cleanup_run.sh` + systemd service/timer — notifies user at 45min, kills browsers/fm/image-viewers at 50min; crystallization fires at 60min (10min gap) |
+| May 2026 | `cancel sign off` MCP tool added to `flatline_mcp_server.py` — stops cleanup and crystallization timers, kills cleanup script if running, deletes sentinel; machine stays on |
 
 ---
 
@@ -73,7 +78,7 @@ Human memory works because of consolidation: the brain moves things from short-t
 | Model | Port | Service | Details |
 |-------|------|---------|---------|
 | Qwen3.6 35B A3B Q3_K_M (MTP) | 1235 | `llama-qwen-mtp.service` | Primary inference, context 98304, KV q8_0/q8_0, flash-attn, kv-unified, batch 512/512, **draft speculative decoding** (`--spec-type draft-mtp --spec-draft-n-max 2`), 83% acceptance, ~30 tok/s |
-| llama-cpp-mainline (turboquant) | 1239 | `llama-turboquant.service` | Parked, disabled — service file intact if needed |
+| llama-cpp-mainline (turboquant) | 1239 | `llama-turboquant.service` | Retired — binary and service file intact, no active workloads |
 | Granite-embedding-97M-multilingual-r2-Q8_0 | 1236 | `llama-granite.service` | L3 embeddings, 384-dim, Cosine distance |
 | Granite-4.0-H-Micro Q4_K_M | 1237 | — | Context 8192 |
 | Qwen3.6 27B Q3_K_S | 1238 | `llama-crystallizer.service` | Crystallizer, registered |
@@ -168,6 +173,9 @@ The core pipeline. Async, unattended, self-maintaining. Triggered by `signing ou
 | `signing out — [notes]` | Same + attaches annotation as crystallizer hint |
 | `still broken` | Explicit GAP signal mid-session, queues external search |
 | `neither worked` | Same as `still broken` |
+| `hand off` | Generates `flatline_briefing.md` for Naima session handoff — queries TrueMem (L1), MemMachine (L2), git diff; must be called before `signing off` |
+| `signing off` | Creates a new session, ingests Dixie-extracted observations into L1, runs `sign_out`, queues crystallization, generates handoff briefing, powers off — no prior session required |
+| `cancel sign off` | Stops cleanup and crystallization timers, kills cleanup script if running, deletes sentinel — machine stays on |
 
 ### Pre-flight Conflict Check
 
@@ -511,20 +519,34 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 
 | File | Purpose |
 |------|---------|
-| `flatline_mcp_server.py` | 8 MCP tools wired into OpenCode, session persistence via `.current_session`, Neo4j auth with `Auth("basic", ...)` scheme, `extract_text()` helper with PDF/DOCX/EPUB support, PDF OCR via pdf2image + Tesseract 5.5.2 (per-page lazy rasterization, 50-char threshold, 1-indexed page fix), `read_document` + `ingest_document` tools |
+| `flatline_mcp_server.py` | 12 MCP tools wired into OpenCode, Neo4j auth with `Auth("basic", ...)` scheme, `extract_text()` helper with PDF/DOCX/EPUB support, PDF OCR via pdf2image + Tesseract 5.5.2 (per-page lazy rasterization, 50-char threshold, 1-indexed page fix), `read_document` + `ingest_document` tools, `hand_off` standalone function + MCP handler, `sign_off` creates session → ingests Dixie-provided observations into L1 → `sign_out` → sentinel → timer → handoff briefing → poweroff |
 | `flatline_session_close.py` | `dry_run` flag guards model swap and poweroff, `CASE WHEN` replaces `max()` for Neo4j 5.x compatibility |
+
+### Handoff — Dixie → Naima Bridge
+
+| File | Purpose |
+|------|---------|
+| `flatline_mcp_server.py` | `hand_off` standalone function (line 232) + MCP handler — queries TrueMem L1, MemMachine L2, git diff; writes `flatline_briefing.md` |
+| `flatline_briefing.md` | Generated snapshot for Naima — last 3 days of entries from `flatline_summary.md`, overwritten each `hand_off`, terse schema-filled format |
+
+- **Intent**: `sign_off` creates session, ingests Dixie-extracted observations, runs `sign_out`, queues crystallization, generates briefing, powers off. `hand_off` prepares the briefing. `sign_off` calls `hand_off` internally.
+- **Scope**: reads TrueMem (L1) + MemMachine (L2) + git diff — does not ask Dixie to remember anything, only reads what the system already recorded
+- **Design note**: `hand_off` is explicitly a *human-to-AI handoff tool*, not a system maintenance tool. When Flatline is autonomous and Dixie runs alone, it sits unused.
 
 ### Delayed Crystallization + Shutdown
 
 | File | Purpose |
 |------|---------|
-| `flatline_mcp_server.py` | `sign_off` handler writes `~/.flatline/pending_crystallization` sentinel (JSON: session_id + ISO timestamp), starts `flatline-crystallize.timer` via systemd |
+| `flatline_mcp_server.py` | `sign_off` handler: creates session, ingests client-provided observations (Dixie extraction pass) into L1, runs `sign_out`, writes `~/.flatline/pending_crystallization` sentinel (JSON: session_id + ISO timestamp), starts `flatline-crystallize.timer` via systemd, calls `hand_off`, powers off via background thread |
+| `~/.config/systemd/user/flatline-cleanup.timer` | Triggers 45min after activation (1min accuracy), **not enabled at boot** |
+| `~/.config/systemd/user/flatline-cleanup.service` | Oneshot service running `flatline_cleanup_run.sh`, **not enabled at boot** |
+| `flatline_cleanup_run.sh` | Pre-crystallization cleanup: kills browsers, file managers, image viewers |
 | `~/.config/systemd/user/flatline-crystallize.timer` | Triggers 1h after activation (1min accuracy), **not enabled at boot** |
 | `~/.config/systemd/user/flatline-crystallize.service` | Oneshot service running `flatline_crystallize_run.sh`, **not enabled at boot** |
 | `flatline_crystallize_run.sh` | Sequential shutdown script: stops llama-qwen, polls port 1235 closed (120s), starts llama-crystallizer, polls port 1238 up (180s), calls `crystallize_session()` directly from `flatline_crystallizer.py` via Neo4j driver, stops crystallizer, deletes sentinel, `systemctl poweroff` |
 
-- **Flow**: `sign_off` → write sentinel → start timer → (1h delay) → timer fires → service runs → model swap → crystallize → poweroff
-- **Error handling**: on any failure, stops crystallizer, restarts llama-qwen, deletes sentinel, logs to `~/logs/flatline-crystallize.log`, exits without poweroff
+- **Flow**: `sign_off` → create session → Dixie observation extraction (client-side) → write L1 → `sign_out` → sentinel → start both timers → (45min) cleanup fires → notify user → wait 5min → (50min) kill browsers/fm/image-viewers → (10min later) crystallize fires → model swap → crystallize → poweroff
+- **Error handling**: on observation parse failure, writes fallback observation; on `sign_out` BLOCKED, surfaces conflicts and stops; on any crystallization failure, stops crystallizer, restarts llama-qwen, deletes sentinel, logs to `~/logs/flatline-crystallize.log`, exits without poweroff
 - **Notable**: `flatline_session_close.py` is NOT called by the shell script — `sign_off` already ran `signing_off()` which ran `sign_out()`. The shell script only handles crystallization (model swap + `crystallize_session()`).
 
 ---
@@ -573,6 +595,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | `flatline_l2_promote.py` | L1 → L2 promotion |
 | `flatline_crystallizer.py` | Crystallization pipeline |
 | `flatline_crystallize_run.sh` | Delayed crystallization shutdown script |
+| `flatline_cleanup_run.sh` | Pre-crystallization cleanup — kills browsers, file managers, image viewers |
 | `flatline_session_close.py` | Sign-out + model swap |
 | `flatline_gap_handler.py` | GAP → L3 → SearXNG |
 | `flatline_decay_sweep.py` | Time-based decay |
@@ -595,7 +618,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | `~/.opencode/opencode.json` | OpenCode config (plugin + MCP) |
 | `~/.config/systemd/user/flatline-crystallize.timer` | Delayed crystallization trigger (1h, not enabled at boot) |
 | `~/.config/systemd/user/flatline-crystallize.service` | Delayed crystallization oneshot (not enabled at boot) |
-| `~/.flatline/current_session` | Active session ID (written by `new session` command) |
+| `~/.flatline/current_session` | Active session ID (written by `signing off` — creates its own session) |
 | `~/.flatline/pending_crystallization` | Sentinel file (JSON, session_id + timestamp, written by sign_off) |
 | `~/logs/flatline-crystallize.log` | Crystallization run log |
 | `192.168.1.53:8080` | MemMachine MCP endpoint |

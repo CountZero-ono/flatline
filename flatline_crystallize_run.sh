@@ -9,7 +9,7 @@ cleanup_and_exit() {
     # Stop crystallizer if running
     systemctl --user stop llama-crystallizer.service 2>/dev/null || true
     # Restart llama-qwen
-    systemctl --user start llama-qwen.service 2>/dev/null || true
+    systemctl --user start llama-qwen-mtp.service 2>/dev/null || true
     # Delete sentinel
     rm -f "$SENTINEL"
     exit 1
@@ -31,8 +31,8 @@ log "Starting delayed crystallization run"
 SESSION_ID=$(python3 -c "import json; print(json.load(open('$SENTINEL'))['session_id'])")
 
 # Stop llama-qwen
-log "Stopping llama-qwen.service"
-systemctl --user stop llama-qwen.service || cleanup_and_exit "Failed to stop llama-qwen.service"
+log "Stopping llama-qwen-mtp.service"
+systemctl --user stop llama-qwen-mtp.service || cleanup_and_exit "Failed to stop llama-qwen-mtp.service"
 
 # Poll until port 1235 is closed
 log "Waiting for port 1235 to close..."

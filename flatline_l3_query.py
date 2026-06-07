@@ -1,6 +1,6 @@
 import requests
 
-QDRANT_URL = "http://192.168.1.84:6333"
+QDRANT_URL = "http://192.168.1.44:6333"
 COLLECTION_NAME = "flatline"
 EMBEDDING_URL = "http://192.168.1.112:1236/v1/embeddings"
 EMBEDDING_MODEL = "granite-embed-97m"

@@ -226,6 +226,76 @@ def load_or_create_session():
     open(SESSION_FILE, 'w').write(sid)
     return sid
 
+def hand_off(session_id: str, session_description: str = "Session handoff") -> str:
+    """Generate flatline_briefing.md for Naima session handoff."""
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Source 1: TrueMem (L1 observations)
+    l1_observations = _query_truemem(session_id)
+
+    # Source 2: MemMachine (L2 changed nodes + unresolved contradictions)
+    l2_nodes, l2_contradictions = _query_memmachine(session_id)
+
+    # Source 3: git diff --stat (ground truth file changes)
+    git_changes = _git_diff_stat()
+
+    # Assemble What Changed from all three sources
+    what_changed = f"""### TrueMem (L1 observations)
+{l1_observations}
+
+### MemMachine (L2 nodes changed)
+{l2_nodes}
+
+### git diff --stat (file changes)
+{git_changes}"""
+
+    # Assemble What's Broken from L2 unresolved contradictions + L1
+    what_broken = f"""### Unresolved L2 contradictions
+{l2_contradictions}
+
+### L1 observations flagged as broken or unresolved
+(no additional broken items detected in L1 observations for this session.)"""
+
+    # Decisions Made and Needs Naima are empty — Dixie fills these in manually
+    # before calling hand_off, or they stay empty and Naima infers from context
+    decisions_made = "- No decisions recorded this session (or not yet extracted from L1)."
+    needs_naima = "- Nothing requires Naima's design/architecture input at this time."
+    next_task = "- Review briefing, confirm format sufficiency, decide on repo scope for source files."
+
+    briefing = f"""# Flatline Briefing
+_Session: {session_id} — {date_str} — {session_description}_
+
+---
+
+## What Changed
+{what_changed}
+
+---
+
+## What's Broken Right Now
+{what_broken}
+
+---
+
+## Decisions Made This Session
+{decisions_made}
+
+---
+
+## Needs Naima
+{needs_naima}
+
+---
+
+## Next Task
+{next_task}
+"""
+    with open(BRIEFING_FILE, "w") as f:
+        f.write(briefing)
+
+    return f"Briefing written to {BRIEFING_FILE}."
+
+
 server = Server("flatline-knowledge")
 
 
@@ -336,12 +406,25 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "annotation": {"type": "string", "description": "Optional session annotation"},
+                    "observations": {
+                        "type": "array",
+                        "description": "JSON array of observations extracted from conversation. Each item: {content: str, decay_class: ARCHITECTURAL|OPERATIONAL|TRANSIENT|PERSONAL, confidence: float 0.0-1.0}",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "content": {"type": "string"},
+                                "decay_class": {"type": "string", "enum": ["ARCHITECTURAL", "OPERATIONAL", "TRANSIENT", "PERSONAL"]},
+                                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                            },
+                            "required": ["content"],
+                        },
+                    },
                 },
             },
         ),
         Tool(
             name="hand_off",
-            description="Generate flatline_briefing.md for Naima session handoff. Queries TrueMem (L1), MemMachine (L2), and git diff. Must be called before 'signing off'.",
+            description="Generate flatline_briefing.md for Naima session handoff. Queries TrueMem (L1), MemMachine (L2), and git diff. Call before 'signing off' if you intend to end the session, but do not call signing off automatically. Wait for explicit user instruction.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -382,6 +465,14 @@ async def list_tools():
                     "query": {"type": "string", "description": "Search query text"},
                 },
                 "required": ["query"],
+            },
+        ),
+        Tool(
+            name="cancel",
+            description="Cancel pending crystallization and shutdown. Trigger phrase: 'cancel sign off'. Stops cleanup and crystallization timers, kills cleanup script if running, deletes sentinel file. Safe to call at any point before crystallization starts.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
             },
         ),
     ]
@@ -437,109 +528,91 @@ async def call_tool(name, arguments):
 
     elif name == "sign_off":
         annotation = arguments.get("annotation")
-        try:
-            sign_out(DB_PATH, session_id, annotation=annotation)
-            if os.path.exists(SESSION_FILE):
-                os.remove(SESSION_FILE)
 
-            # Auto-commit handoff files to GitHub (non-fatal)
-            _git_commit_handoff_files(session_id)
+        # Step 1: create session
+        session_id = create_session(DB_PATH)
+        session_file = os.path.expanduser("~/.flatline/current_session")
+        os.makedirs(os.path.dirname(session_file), exist_ok=True)
+        with open(session_file, "w") as f:
+            f.write(session_id)
 
-            # Write sentinel file for delayed crystallization
-            sentinel_dir = os.path.expanduser("~/.flatline")
-            os.makedirs(sentinel_dir, exist_ok=True)
-            sentinel_path = os.path.join(sentinel_dir, "pending_crystallization")
-            sentinel_data = {
-                "session_id": session_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            with open(sentinel_path, "w") as f:
-                json.dump(sentinel_data, f)
-
-            # Reset the delayed crystallization timer
-            subprocess.run(
-                ["systemctl", "--user", "stop", "flatline-crystallize.timer"],
-                capture_output=True,
+        # Step 2: ingest client-provided observations (Dixie extraction pass)
+        observations_raw = arguments.get("observations")
+        if observations_raw:
+            try:
+                if isinstance(observations_raw, str):
+                    observations = json.loads(observations_raw)
+                else:
+                    observations = observations_raw
+                for obs in observations:
+                    write_observation(
+                        DB_PATH, session_id,
+                        obs["content"],
+                        obs.get("decay_class", "TRANSIENT"),
+                    )
+            except Exception as e:
+                logging.warning(f"Observation parse failed: {e}")
+                write_observation(
+                    DB_PATH, session_id,
+                    "Session ended without observation extraction",
+                    "TRANSIENT",
+                )
+        else:
+            write_observation(
+                DB_PATH, session_id,
+                "Session ended without observation extraction",
+                "TRANSIENT",
             )
-            subprocess.run(
-                ["systemctl", "--user", "start", "flatline-crystallize.timer"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
 
-            return [TextContent(type="text", text="Session closed. Crystallization scheduled. Machine powering off.")]
-        except RuntimeError as e:
-            return [TextContent(type="text", text=f"Error: {e}")]
+        # Step 3: sign_out
+        result = sign_out(DB_PATH, session_id, annotation=annotation, force=False)
+        if result["status"] == "BLOCKED":
+            conflict_lines = []
+            for c in result["conflicts"]:
+                conflict_lines.append(
+                    f"- {c['description']} (A: {c['observation_a_id']}, B: {c['observation_b_id']})"
+                )
+            return [TextContent(type="text", text=(
+                "sign_out BLOCKED by unresolved contradictions:\n"
+                + "\n".join(conflict_lines)
+            ))]
+
+        # Step 4: write pending_crystallization sentinel
+        sentinel_dir = os.path.expanduser("~/.flatline")
+        os.makedirs(sentinel_dir, exist_ok=True)
+        sentinel_path = os.path.join(sentinel_dir, "pending_crystallization")
+        sentinel_data = {
+            "session_id": session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(sentinel_path, "w") as f:
+            json.dump(sentinel_data, f)
+
+        # Step 5: start cleanup timer (fires at 45min)
+        subprocess.run(
+            ["systemctl", "--user", "start", "flatline-cleanup.timer"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        # Step 6: start crystallization timer (fires at 60min)
+        subprocess.run(
+            ["systemctl", "--user", "start", "flatline-crystallize.timer"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        # Step 7: generate handoff briefing
+        hand_off(session_id, session_description=annotation or "Session handoff")
+
+        return [TextContent(type="text", text="Session captured. Crystallization queued. Signing off.")]
 
     elif name == "hand_off":
         session_desc = arguments.get("session_description", "Session handoff")
-        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-        # Source 1: TrueMem (L1 observations)
-        l1_observations = _query_truemem(session_id)
-
-        # Source 2: MemMachine (L2 changed nodes + unresolved contradictions)
-        l2_nodes, l2_contradictions = _query_memmachine(session_id)
-
-        # Source 3: git diff --stat (ground truth file changes)
-        git_changes = _git_diff_stat()
-
-        # Assemble What Changed from all three sources
-        what_changed = f"""### TrueMem (L1 observations)
-{l1_observations}
-
-### MemMachine (L2 nodes changed)
-{l2_nodes}
-
-### git diff --stat (file changes)
-{git_changes}"""
-
-        # Assemble What's Broken from L2 unresolved contradictions + L1
-        what_broken = f"""### Unresolved L2 contradictions
-{l2_contradictions}
-
-### L1 observations flagged as broken or unresolved
-(no additional broken items detected in L1 observations for this session.)"""
-
-        # Decisions Made and Needs Naima are empty — Dixie fills these in manually
-        # before calling hand_off, or they stay empty and Naima infers from context
-        decisions_made = "- No decisions recorded this session (or not yet extracted from L1)."
-        needs_naima = "- Nothing requires Naima's design/architecture input at this time."
-        next_task = "- Review briefing, confirm format sufficiency, decide on repo scope for source files."
-
-        briefing = f"""# Flatline Briefing
-_Session: {session_id} — {date_str} — {session_desc}_
-
----
-
-## What Changed
-{what_changed}
-
----
-
-## What's Broken Right Now
-{what_broken}
-
----
-
-## Decisions Made This Session
-{decisions_made}
-
----
-
-## Needs Naima
-{needs_naima}
-
----
-
-## Next Task
-{next_task}
-"""
-        with open(BRIEFING_FILE, "w") as f:
-            f.write(briefing)
-
-        return [TextContent(type="text", text=f"Briefing written to {BRIEFING_FILE}. Review and edit if needed, then call 'signing off' to finalize and push.")]
+        result = hand_off(session_id, session_description=session_desc)
+        return [TextContent(type="text", text=f"{result}. Review and edit if needed, then call 'signing off' to finalize and push.")]
 
     elif name == "read_document":
         path = arguments["path"]
@@ -609,6 +682,41 @@ _Session: {session_id} — {date_str} — {session_desc}_
                     })
 
         return [TextContent(type="text", text=json.dumps(results, indent=2))]
+
+    elif name == "cancel":
+        results = []
+
+        # Step 1: stop timers
+        for timer in ["flatline-cleanup.timer", "flatline-crystallize.timer"]:
+            r = subprocess.run(
+                ["systemctl", "--user", "stop", timer],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                results.append(f"Stopped {timer}")
+            else:
+                results.append(f"{timer} was not running")
+
+        # Step 2: kill cleanup script if running
+        r = subprocess.run(
+            ["pkill", "-f", "flatline_cleanup_run.sh"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            results.append("Killed running cleanup script")
+        else:
+            results.append("Cleanup script was not running")
+
+        # Step 3: delete sentinel
+        sentinel_path = os.path.expanduser("~/.flatline/pending_crystallization")
+        if os.path.exists(sentinel_path):
+            os.remove(sentinel_path)
+            results.append("Sentinel file deleted")
+        else:
+            results.append("No sentinel file found")
+
+        summary = "\n".join(f"- {r}" for r in results)
+        return [TextContent(type="text", text=f"Crystallization cancelled. Machine will stay on.\n{summary}")]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

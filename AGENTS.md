@@ -88,13 +88,6 @@ session_id = row[0]
 
 If no open session exists, tell the user: "No open session found. Say 'new session' to start one."
 
-**new session**
-
-Import `create_session` from `flatline_l1_writer`
-Call `session_id = create_session(db_path)`
-Write `session_id` to `~/.flatline/current_session`
-Confirm: "New session started."
-
 **signing out** or **signing out — [notes]**
 
 Import `sign_out` from `flatline_l1_session`
@@ -116,7 +109,23 @@ Import `neither_worked` from `flatline_l1_session`
 - Call `neither_worked(db_path, flag_id)`
 - Confirm: "Contradiction resolved as NEITHER."
 
+**cancel sign off**
+
+Call the `cancel` MCP tool from flatline-knowledge.
+Do NOT manually stop timers or delete files. Use the MCP tool only.
+
 **signing off** or **signing off — [notes]**
 
-Call the `sign_off` MCP tool from flatline-knowledge with annotation=notes_if_any.
-Do NOT call signing_off() directly. Do NOT call sign_out(). Use the MCP tool only.
+Before calling the MCP tool, Dixie performs an extraction pass over the full conversation history in context. Extract every fact worth storing permanently: decisions made, configs changed, bugs found, bugs fixed, paths confirmed, approaches rejected, design choices and their rationale.
+
+For each observation produce:
+- content: one sentence, specific and factual
+- decay_class: ARCHITECTURAL | OPERATIONAL | TRANSIENT | PERSONAL
+- confidence: 0.0–1.0
+
+Then call the sign_off MCP tool from flatline-knowledge with:
+- annotation: notes_if_any
+- observations: the extracted JSON array
+
+Do NOT call sign_out() directly. Do NOT call signing_off() directly. Use the MCP tool only.
+This is the only session command needed. No prior new session required.
