@@ -1,7 +1,10 @@
 import os
 import json
 import logging
+import socket
 import subprocess
+import time
+import requests
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
@@ -24,6 +27,7 @@ from flatline_l1_session import (
 from flatline_session_close import signing_out
 from flatline_l3_ingest import ingest_text
 from flatline_l3_query import embed, search
+from flatline_crystallizer import crystallize_session
 
 DB_PATH = os.path.expanduser("~/OCProjects/flatline/flatline.db")
 SESSION_FILE = os.path.expanduser("~/OCProjects/flatline/.current_session")
@@ -469,7 +473,7 @@ async def list_tools():
         ),
         Tool(
             name="cancel",
-            description="Cancel pending crystallization and shutdown. Trigger phrase: 'cancel sign off'. Stops cleanup and crystallization timers, kills cleanup script if running, deletes sentinel file. Safe to call at any point before crystallization starts.",
+            description="Cancel pending crystallization. Trigger phrase: 'cancel sign off'. Stops cleanup and crystallization timers, kills cleanup script if running, deletes sentinel file. Safe to call at any point before crystallization starts.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -531,10 +535,6 @@ async def call_tool(name, arguments):
 
         # Step 1: create session
         session_id = create_session(DB_PATH)
-        session_file = os.path.expanduser("~/.flatline/current_session")
-        os.makedirs(os.path.dirname(session_file), exist_ok=True)
-        with open(session_file, "w") as f:
-            f.write(session_id)
 
         # Step 2: ingest client-provided observations (Dixie extraction pass)
         observations_raw = arguments.get("observations")
@@ -577,37 +577,106 @@ async def call_tool(name, arguments):
                 + "\n".join(conflict_lines)
             ))]
 
-        # Step 4: write pending_crystallization sentinel
-        sentinel_dir = os.path.expanduser("~/.flatline")
-        os.makedirs(sentinel_dir, exist_ok=True)
-        sentinel_path = os.path.join(sentinel_dir, "pending_crystallization")
-        sentinel_data = {
-            "session_id": session_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        with open(sentinel_path, "w") as f:
-            json.dump(sentinel_data, f)
+        # Step 4: crystallize synchronously
+        #   Stop llama-qwen-mtp, start llama-server on port 1235 with
+        #   thinking disabled, call crystallize_session(), then restart.
+        MODEL_PATH = (
+            "/mnt/Models/LM Models/unsloth/"
+            "Qwen3.6-35B-A3B-MTP-GGUF/"
+            "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf"
+        )
+        LLAMA_SERVER = "/home/fuad/llama-cpp-mainline/build/bin/llama-server"
+        CRYSTALLIZE_URL = "http://localhost:1235/v1/chat/completions"
 
-        # Step 5: start cleanup timer (fires at 45min)
+        # 4a: stop llama-qwen-mtp
         subprocess.run(
-            ["systemctl", "--user", "start", "flatline-cleanup.timer"],
-            check=True,
-            capture_output=True,
-            text=True,
+            ["systemctl", "--user", "stop", "llama-qwen-mtp.service"],
+            check=True, capture_output=True, text=True,
         )
 
-        # Step 6: start crystallization timer (fires at 60min)
+        # 4b: wait for port 1235 to close
+        for _ in range(24):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            ready = s.connect_ex(("localhost", 1235))
+            s.close()
+            if ready != 0:
+                break
+            time.sleep(5)
+        else:
+            return [TextContent(type="text", text="sign_off failed: port 1235 did not close after stopping llama-qwen-mtp.")]
+
+        # 4c: start llama-server with thinking disabled
+        start_cmd = [
+            LLAMA_SERVER,
+            "-m", MODEL_PATH,
+            "-ngl", "999", "-c", "65536", "-np", "1",
+            "--cache-type-k", "q8_0",
+            "--cache-type-v", "q8_0",
+            "--host", "0.0.0.0", "--port", "1235",
+            "--batch-size", "1024", "--ubatch-size", "512",
+            "--alias", "qwen3.6-35b-a3b-mtp@q3_k_m",
+            "--temp", "0.6",
+            "--top-k", "20", "--top-p", "0.95", "--min-p", "0.0",
+            "--flash-attn", "on",
+            "--cont-batching",
+            "--reasoning-budget", "0",
+            "--spec-type", "draft-mtp",
+            "--spec-draft-n-max", "2",
+        ]
+        _server_proc = subprocess.Popen(start_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # 4d: wait for port 1235 to respond
+        for _ in range(36):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            ready = s.connect_ex(("localhost", 1235))
+            s.close()
+            if ready == 0:
+                break
+            time.sleep(5)
+        else:
+            _server_proc.terminate()
+            subprocess.run(
+                ["systemctl", "--user", "start", "llama-qwen-mtp.service"],
+                check=True, capture_output=True, text=True,
+            )
+            return [TextContent(type="text", text="sign_off failed: llama-server did not start on port 1235.")]
+
+        # 4e: call crystallize_session (reads L1, L2, POSTs to model, writes Neo4j/Qdrant)
+        from neo4j import GraphDatabase, Auth
+        neo4j_driver = GraphDatabase.driver(
+            "bolt://192.168.1.53:7687",
+            auth=Auth("basic", "neo4j", "neo4j_password"),
+        )
+        try:
+            with neo4j_driver.session() as neo4j_session:
+                result = crystallize_session(
+                    DB_PATH, neo4j_session, session_id,
+                    user_annotation=annotation,
+                    url=CRYSTALLIZE_URL,
+                )
+        finally:
+            neo4j_driver.close()
+
+        # 4f: stop llama-server, restart llama-qwen-mtp
+        _server_proc.terminate()
+        _server_proc.wait(timeout=30)
         subprocess.run(
-            ["systemctl", "--user", "start", "flatline-crystallize.timer"],
-            check=True,
-            capture_output=True,
-            text=True,
+            ["systemctl", "--user", "start", "llama-qwen-mtp.service"],
+            check=True, capture_output=True, text=True,
         )
 
-        # Step 7: generate handoff briefing
-        hand_off(session_id, session_description=annotation or "Session handoff")
+        # Step 5: commit handoff files to local git, then push to GitHub
+        _git_commit_handoff_files(session_id)
 
-        return [TextContent(type="text", text="Session captured. Crystallization queued. Signing off.")]
+        return [TextContent(
+            type="text",
+            text=(
+                f"Session captured. Crystallized: "
+                f"{result.get('entities', '0')} entities, "
+                f"{result.get('facts', '0')} facts. "
+                f"Handoff committed and pushed."
+            ),
+        )]
 
     elif name == "hand_off":
         session_desc = arguments.get("session_description", "Session handoff")

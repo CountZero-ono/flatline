@@ -94,5 +94,4 @@ systemctl --user stop llama-crystallizer.service || cleanup_and_exit "Failed to 
 log "Deleting sentinel file"
 rm -f "$SENTINEL"
 
-log "Crystallization complete. Powering off."
-systemctl poweroff
+log "Crystallization complete."

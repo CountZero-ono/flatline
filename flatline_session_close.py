@@ -41,18 +41,6 @@ def service_start(name):
     time.sleep(SERVICE_START_WAIT)
 
 
-def poweroff():
-    try:
-        subprocess.run(
-            ["systemctl", "poweroff"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Failed to poweroff: {e.stderr}")
-
-
 def run_crystallization(db_path, neo4j_session, session_id, user_annotation=None, dry_run=False):
     if not dry_run:
         service_stop(QWEN_SERVICE)
@@ -82,7 +70,6 @@ def signing_off(db_path, neo4j_session, session_id, user_annotation=None):
         raise RuntimeError("Unresolved contradictions — resolve before signing out")
     sign_out(db_path, session_id, user_annotation)
     run_crystallization(db_path, neo4j_session, session_id, user_annotation, dry_run=False)
-    poweroff()
 
 
 if __name__ == "__main__":

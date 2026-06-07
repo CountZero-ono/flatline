@@ -84,8 +84,13 @@ def get_l2_subgraph(neo4j_session, session_id):
     return json.dumps(data)
 
 
-def call_crystallizer(l1_content, l2_context, user_annotation=None):
-    """Builds the prompt, POSTs to the crystallizer, returns raw parsed dict."""
+def call_crystallizer(l1_content, l2_context, user_annotation=None, url=None):
+    """Builds the prompt, POSTs to the model, returns raw parsed dict.
+
+    *url* defaults to CRYSTALLIZER_URL (legacy). Pass a different URL
+    (e.g. port 1235) when calling via the MCP sign_off path.
+    """
+    target_url = url or CRYSTALLIZER_URL
     annotation = user_annotation if user_annotation is not None else "null"
     user_prompt = (
         "<graph_context>\n"
@@ -106,7 +111,7 @@ def call_crystallizer(l1_content, l2_context, user_annotation=None):
         ],
         "stream": False,
     }
-    resp = requests.post(CRYSTALLIZER_URL, json=payload)
+    resp = requests.post(target_url, json=payload)
     if resp.status_code != 200:
         raise RuntimeError(
             f"Crystallizer HTTP error: {resp.status_code} {resp.text}"
