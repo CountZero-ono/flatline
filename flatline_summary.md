@@ -37,7 +37,12 @@ The system is also named "Flatline" because the flatline is where memory begins 
 | May 2026 | `AGENTS.md` updated: `new session` command removed; `signing off` now creates its own session |
 | May 2026 | Installed `graphify` Opencode skill — converts any folder of files into a navigable knowledge graph with community detection, persistent graph storage, and an honest audit trail (EXTRACTED / INFERRED / AMBIGUOUS edges) |
 | May 2026 | Added pre-crystallization cleanup: `flatline_cleanup_run.sh` + systemd service/timer — notifies user at 45min, kills browsers/fm/image-viewers at 50min; crystallization fires at 60min (10min gap) |
-| May 2026 | `cancel sign off` MCP tool added to `flatline_mcp_server.py` — stops cleanup and crystallization timers, kills cleanup script if running, deletes sentinel; machine stays on |
+| Jun 2026 | `cancel sign off` MCP tool description trimmed — removed "and shutdown" from description |
+| Jun 2026 | `sign_off` rewritten: crystallization runs in background thread instead of systemd timers + sentinel; result written to `~/.flatline/last_crystallization.json`; removed sentinel file, cleanup timer start, crystallize timer start, hand_off call from main flow (now in-thread); `neo4j_driver` made global in `call_tool` |
+| Jun 2026 | `crystallize_session()` and `call_crystallizer()` accept `url` parameter — defaults to CRYSTALLIZER_URL, allows targeting port 1235 for MCP sign-off path |
+| Jun 2026 | `poweroff()` removed from `flatline_session_close.py` — signing_off() no longer powers off the machine |
+| Jun 2026 | `flatline_crystallize_run.sh` — poweroff line removed; script no longer shuts down the machine |
+| Jun 2026 | `cancel sign off` MCP tool added to `flatline_mcp_server.py` — stops cleanup and crystallization timers, kills cleanup script if running, deletes sentinel; machine stays on |
 
 ---
 
@@ -144,26 +149,28 @@ A GAP is not a dead end. It is a work order.
 
 ### Crystallization Loop
 
-The core pipeline. Async, unattended, self-maintaining. Triggered by `signing out`.
+The core pipeline. Async, unattended, self-maintaining. Triggered by `signing off` (which creates its own session).
 
 1. Session generates raw observations → written to L1 with Ebbinghaus decay
-2. Trigger fires → crystallization job queued
-3. 35B MoE unloads → Qwen3 27B Dense loads as dedicated crystallizer
-4. Crystallizer reads L1 observations + relevant L2 subgraph context
-5. Pass 1: Extract typed entities + facts with confidence scores
-6. Pass 2: Lightweight resolver handles contradiction ID matching
-7. Quality gate: confidence threshold, corroboration check, contradiction resolution
-8. Promoted facts written to L2 (Neo4j) with typed edges
-9. Facts embedded and indexed in L3 (Qdrant)
-10. Dense unloads → 35B MoE reloads → ready for next session
-11. Next session start: relevant L2 subgraph injected into context
+2. `sign_off` writes observations to L1, runs `sign_out`, then starts crystallization in a background thread
+3. Crystallizer (on port 1235 via MCP path) reads L1 observations + relevant L2 subgraph context
+4. Pass 1: Extract typed entities + facts with confidence scores
+5. Pass 2: Lightweight resolver handles contradiction ID matching
+6. Quality gate: confidence threshold, corroboration check, contradiction resolution
+7. Promoted facts written to L2 (Neo4j) with typed edges
+8. Facts embedded and indexed in L3 (Qdrant)
+9. Result written to `~/.flatline/last_crystallization.json`
+10. Handoff briefing generated within the thread
+11. Machine stays on — no poweroff
+12. Next session start: relevant L2 subgraph injected into context
 
 ### Two-Model Strategy
 
 | Role | Model | Config |
 |------|-------|--------|
 | Interactive / Agentic | Qwen3.6 35B A3B Q3_K_M (MTP) | Vulkan, 16GB UMA, ctx 98304, thinking ON, **draft speculative decoding** (`--spec-type draft-mtp --spec-draft-n-max 2`), 83% acceptance, ~30 tok/s |
-| Crystallizer | Qwen3.6 27B Q3_K_S | Async, unattended, thinking ON, no time constraint |
+| Crystallizer (MCP sign-off path) | Qwen3.6 35B A3B Q3_K_M (MTP) | Same model, called via port 1235 — no model swap needed |
+| Crystallizer (legacy shell path) | Qwen3.6 27B Q3_K_S | Async, unattended, thinking ON, no time constraint, port 1238 |
 
 ### Command Vocabulary
 
@@ -174,7 +181,7 @@ The core pipeline. Async, unattended, self-maintaining. Triggered by `signing ou
 | `still broken` | Explicit GAP signal mid-session, queues external search |
 | `neither worked` | Same as `still broken` |
 | `hand off` | Generates `flatline_briefing.md` for Naima session handoff — queries TrueMem (L1), MemMachine (L2), git diff; must be called before `signing off` |
-| `signing off` | Creates a new session, ingests Dixie-extracted observations into L1, runs `sign_out`, queues crystallization, generates handoff briefing, powers off — no prior session required |
+| `signing off` | Creates a new session, ingests Dixie-extracted observations into L1, runs `sign_out`, crystallizes in background thread, generates handoff briefing, machine stays on — no prior session required |
 | `cancel sign off` | Stops cleanup and crystallization timers, kills cleanup script if running, deletes sentinel — machine stays on |
 
 ### Pre-flight Conflict Check
@@ -464,7 +471,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | File | Purpose |
 |------|---------|
 | `flatline_crystallizer.py` | Full crystallization pipeline (L1 → LLM → Neo4j + Qdrant) |
-| `flatline_session_close.py` | Session close protocol with model swap, crystallization, poweroff |
+| `flatline_session_close.py` | Session close protocol with model swap, crystallization; `poweroff()` removed |
 
 - MemMachine 0.3.6 deployed via Docker on LXC 106 @ 192.168.1.53
 - Neo4j + Postgres healthy
@@ -494,14 +501,14 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 
 | File | Purpose |
 |------|---------|
-| `flatline_crystallizer.py` | Reads L1 observations + L2 subgraph, calls Qwen3.6 27B, writes entities/facts to Neo4j + Qdrant |
-| `flatline_crystallize_run.sh` | Delayed crystallization: model swap, port polling, crystallize_session() call, poweroff |
-| `flatline_session_close.py` | Model swap: stops QWEN service, starts CRYSTALLIZER service, runs crystallization, restores QWEN |
+| `flatline_crystallizer.py` | Reads L1 observations + L2 subgraph, calls model, writes entities/facts to Neo4j + Qdrant; `call_crystallizer()` and `crystallize_session()` accept `url` parameter |
+| `flatline_crystallize_run.sh` | Legacy — kept for reference, no longer used by sign_off flow |
+| `flatline_session_close.py` | Model swap: stops QWEN service, starts CRYSTALLIZER service, runs crystallization, restores QWEN; `poweroff()` removed |
 
-- Qwen3.6 27B Q3_K_S on port 1238 as dedicated crystallizer
+- Qwen3.6 35B MTP on port 1235 serves as the crystallizer endpoint for MCP sign-off path
 - MIN_CONFIDENCE = 0.3
 - Two-pass contradiction handling (flag in Pass 1, resolve in Pass 2)
-- Delayed crystallization via systemd timer (1h after sign_off), sentinel file, error recovery with llama-qwen restart
+- Crystallization runs immediately in a background daemon thread; result written to `~/.flatline/last_crystallization.json`
 
 ### Graph Knowledge Extraction
 
@@ -519,8 +526,8 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 
 | File | Purpose |
 |------|---------|
-| `flatline_mcp_server.py` | 12 MCP tools wired into OpenCode, Neo4j auth with `Auth("basic", ...)` scheme, `extract_text()` helper with PDF/DOCX/EPUB support, PDF OCR via pdf2image + Tesseract 5.5.2 (per-page lazy rasterization, 50-char threshold, 1-indexed page fix), `read_document` + `ingest_document` tools, `hand_off` standalone function + MCP handler, `sign_off` creates session → ingests Dixie-provided observations into L1 → `sign_out` → sentinel → timer → handoff briefing → poweroff |
-| `flatline_session_close.py` | `dry_run` flag guards model swap and poweroff, `CASE WHEN` replaces `max()` for Neo4j 5.x compatibility |
+| `flatline_mcp_server.py` | 12 MCP tools wired into OpenCode, Neo4j auth with `Auth("basic", ...)` scheme, `extract_text()` helper with PDF/DOCX/EPUB support, PDF OCR via pdf2image + Tesseract 5.5.2 (per-page lazy rasterization, 50-char threshold, 1-indexed page fix), `read_document` + `ingest_document` tools, `hand_off` standalone function + MCP handler, `sign_off` creates session → ingests Dixie-provided observations into L1 → `sign_out` → crystallizes in background thread → writes result to `~/.flatline/last_crystallization.json` → generates handoff briefing → machine stays on |
+| `flatline_session_close.py` | `dry_run` flag guards model swap, `CASE WHEN` replaces `max()` for Neo4j 5.x compatibility, `poweroff()` removed |
 
 ### Handoff — Dixie → Naima Bridge
 
@@ -529,25 +536,20 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | `flatline_mcp_server.py` | `hand_off` standalone function (line 232) + MCP handler — queries TrueMem L1, MemMachine L2, git diff; writes `flatline_briefing.md` |
 | `flatline_briefing.md` | Generated snapshot for Naima — last 3 days of entries from `flatline_summary.md`, overwritten each `hand_off`, terse schema-filled format |
 
-- **Intent**: `sign_off` creates session, ingests Dixie-extracted observations, runs `sign_out`, queues crystallization, generates briefing, powers off. `hand_off` prepares the briefing. `sign_off` calls `hand_off` internally.
+- **Intent**: `sign_off` creates session, ingests Dixie-extracted observations, runs `sign_out`, crystallizes in background thread, generates briefing (in-thread), machine stays on. `hand_off` prepares the briefing standalone. `sign_off` calls `hand_off` internally within the thread.
 - **Scope**: reads TrueMem (L1) + MemMachine (L2) + git diff — does not ask Dixie to remember anything, only reads what the system already recorded
 - **Design note**: `hand_off` is explicitly a *human-to-AI handoff tool*, not a system maintenance tool. When Flatline is autonomous and Dixie runs alone, it sits unused.
 
-### Delayed Crystallization + Shutdown
+### Background Crystallization
 
 | File | Purpose |
 |------|---------|
-| `flatline_mcp_server.py` | `sign_off` handler: creates session, ingests client-provided observations (Dixie extraction pass) into L1, runs `sign_out`, writes `~/.flatline/pending_crystallization` sentinel (JSON: session_id + ISO timestamp), starts `flatline-crystallize.timer` via systemd, calls `hand_off`, powers off via background thread |
-| `~/.config/systemd/user/flatline-cleanup.timer` | Triggers 45min after activation (1min accuracy), **not enabled at boot** |
-| `~/.config/systemd/user/flatline-cleanup.service` | Oneshot service running `flatline_cleanup_run.sh`, **not enabled at boot** |
-| `flatline_cleanup_run.sh` | Pre-crystallization cleanup: kills browsers, file managers, image viewers |
-| `~/.config/systemd/user/flatline-crystallize.timer` | Triggers 1h after activation (1min accuracy), **not enabled at boot** |
-| `~/.config/systemd/user/flatline-crystallize.service` | Oneshot service running `flatline_crystallize_run.sh`, **not enabled at boot** |
-| `flatline_crystallize_run.sh` | Sequential shutdown script: stops llama-qwen, polls port 1235 closed (120s), starts llama-crystallizer, polls port 1238 up (180s), calls `crystallize_session()` directly from `flatline_crystallizer.py` via Neo4j driver, stops crystallizer, deletes sentinel, `systemctl poweroff` |
+| `flatline_mcp_server.py` | `sign_off` handler: creates session, ingests client-provided observations (Dixie extraction pass) into L1, runs `sign_out`, starts crystallization in a daemon thread, writes result to `~/.flatline/last_crystallization.json`, generates handoff briefing within the thread, machine stays on |
+| `flatline_crystallizer.py` | `crystallize_session()` orchestrates the pipeline; accepts `url` parameter to target any llama-server endpoint (defaults to CRYSTALLIZER_URL) |
 
-- **Flow**: `sign_off` → create session → Dixie observation extraction (client-side) → write L1 → `sign_out` → sentinel → start both timers → (45min) cleanup fires → notify user → wait 5min → (50min) kill browsers/fm/image-viewers → (10min later) crystallize fires → model swap → crystallize → poweroff
-- **Error handling**: on observation parse failure, writes fallback observation; on `sign_out` BLOCKED, surfaces conflicts and stops; on any crystallization failure, stops crystallizer, restarts llama-qwen, deletes sentinel, logs to `~/logs/flatline-crystallize.log`, exits without poweroff
-- **Notable**: `flatline_session_close.py` is NOT called by the shell script — `sign_off` already ran `signing_off()` which ran `sign_out()`. The shell script only handles crystallization (model swap + `crystallize_session()`).
+- **Flow**: `sign_off` → create session → Dixie observation extraction (client-side) → write L1 → `sign_out` → background thread starts → crystallizer calls model on port 1235 → writes result JSON → handoff briefing generated → return immediately to MCP client
+- **Error handling**: on observation parse failure, writes fallback observation; on `sign_out` BLOCKED, surfaces conflicts and stops; on any crystallization failure, writes `{"status": "failure", "error": "..."}` to result JSON, logs to `~/logs/flatline-crystallize.log`
+- **Notable**: No systemd timers, no sentinel file, no poweroff. Crystallization runs immediately in a background daemon thread. Result is checkable at `~/.flatline/last_crystallization.json`.
 
 ---
 
@@ -559,16 +561,15 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 2. **Consolidation trigger design** — what promotes L1 → L2? Time? Importance score? Both?
 3. **MCP wiring** — DONE
 4. **Seed MemMachine with stack context**
-5. **Delayed crystallization + shutdown** — DONE (sentinel file, systemd timer/service, shell script with error handling and port polling)
+5. **Background crystallization** — DONE (daemon thread, result JSON, no poweroff)
 
 ### Medium Priority
 
-5. **llm-wiki install and session ingestion** → Qdrant collection: `sessions`
-6. **Document ingestion pipeline** (tool TBD) → Qdrant collection: `knowledge` — DONE
-7. **Observation threshold trigger** — hot session, 20+ observations (in spec, not in code)
-8. **Nightly sweep** — scheduled maintenance trigger (in spec, not in code)
-9. **Decay check trigger** — routine confidence audit (sweep code exists, trigger not wired)
-10. **Crystallizer model deployment** — DONE
+6. **llm-wiki install and session ingestion** → Qdrant collection: `sessions`
+7. **Document ingestion pipeline** (tool TBD) → Qdrant collection: `knowledge` — DONE
+8. **Observation threshold trigger** — hot session, 20+ observations (in spec, not in code)
+9. **Nightly sweep** — scheduled maintenance trigger (in spec, not in code)
+10. **Decay check trigger** — routine confidence audit (sweep code exists, trigger not wired)
 11. **Performance tuning** — optimize L3 pipeline throughput and Ebbinghaus curve parameters
 12. **Document reader tools** (read_document, ingest_document) — DONE
 13. **Session history retrieval** (query_sessions) — semantic search against sessions Qdrant collection
@@ -594,7 +595,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | `flatline_l1_test.py` | L1 tests |
 | `flatline_l2_promote.py` | L1 → L2 promotion |
 | `flatline_crystallizer.py` | Crystallization pipeline |
-| `flatline_crystallize_run.sh` | Delayed crystallization shutdown script |
+| `flatline_crystallize_run.sh` | Legacy — kept for reference, no longer used by sign_off flow |
 | `flatline_cleanup_run.sh` | Pre-crystallization cleanup — kills browsers, file managers, image viewers |
 | `flatline_session_close.py` | Sign-out + model swap |
 | `flatline_gap_handler.py` | GAP → L3 → SearXNG |
@@ -616,10 +617,8 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 |------|---------|
 | `~/.true-mem/memory.db` | L1 true-mem SQLite database |
 | `~/.opencode/opencode.json` | OpenCode config (plugin + MCP) |
-| `~/.config/systemd/user/flatline-crystallize.timer` | Delayed crystallization trigger (1h, not enabled at boot) |
-| `~/.config/systemd/user/flatline-crystallize.service` | Delayed crystallization oneshot (not enabled at boot) |
 | `~/.flatline/current_session` | Active session ID (written by `signing off` — creates its own session) |
-| `~/.flatline/pending_crystallization` | Sentinel file (JSON, session_id + timestamp, written by sign_off) |
+| `~/.flatline/last_crystallization.json` | Crystallization result (written by background thread in sign_off) |
 | `~/logs/flatline-crystallize.log` | Crystallization run log |
 | `192.168.1.53:8080` | MemMachine MCP endpoint |
 | `192.168.1.53:9443` | Portainer UI |
