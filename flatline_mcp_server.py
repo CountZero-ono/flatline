@@ -23,7 +23,6 @@ from flatline_l1_writer import create_session, write_observation, flag_contradic
 from flatline_l1_session import (
     sign_out, resolve_a_wins, resolve_b_wins, still_broken, neither_worked,
 )
-from flatline_session_close import signing_out
 from flatline_l3_ingest import ingest_text
 from flatline_l3_query import embed, search
 from flatline_crystallizer import crystallize_session
@@ -393,16 +392,6 @@ async def list_tools():
             },
         ),
         Tool(
-            name="sign_out",
-            description="Close the session and run crystallization.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "annotation": {"type": "string", "description": "Optional session annotation"},
-                },
-            },
-        ),
-        Tool(
             name="sign_off",
             description="Close session, crystallize, and power off the machine.",
             inputSchema={
@@ -518,17 +507,6 @@ async def call_tool(name, arguments):
         flag_id = arguments["flag_id"]
         neither_worked(DB_PATH, flag_id)
         return [TextContent(type="text", text="Resolved: neither worked. GAP queued.")]
-
-    elif name == "sign_out":
-        annotation = arguments.get("annotation")
-        try:
-            with neo4j_driver.session() as neo4j_session:
-                signing_out(DB_PATH, neo4j_session, session_id, annotation, dry_run=False)
-            if os.path.exists(SESSION_FILE):
-                os.remove(SESSION_FILE)
-            return [TextContent(type="text", text="Session closed. Crystallization complete.")]
-        except RuntimeError as e:
-            return [TextContent(type="text", text=f"Error: {e}")]
 
     elif name == "sign_off":
         annotation = arguments.get("annotation")
