@@ -371,7 +371,7 @@ async def list_tools():
         ),
         Tool(
             name="still_broken",
-            description="Resolve a contradiction as NEITHER, queue a GAP.",
+            description="Resolve a contradiction as NEITHER and transition both observations to GAP.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -501,12 +501,12 @@ async def call_tool(name, arguments):
     elif name == "still_broken":
         obs_id = arguments["obs_id"]
         still_broken(DB_PATH, obs_id)
-        return [TextContent(type="text", text="Contradiction resolved as NEITHER. GAP queued.")]
+        return [TextContent(type="text", text="Contradiction resolved as NEITHER. Both observations transitioned to GAP.")]
 
     elif name == "neither_worked":
         flag_id = arguments["flag_id"]
         neither_worked(DB_PATH, flag_id)
-        return [TextContent(type="text", text="Resolved: neither worked. GAP queued.")]
+        return [TextContent(type="text", text="Contradiction resolved as NEITHER. Both observations transitioned to GAP.")]
 
     elif name == "sign_off":
         annotation = arguments.get("annotation")

@@ -3,9 +3,41 @@ from flatline_l1_writer import (
     get_open_contradictions,
     resolve_contradiction,
 )
-from flatline_l1_lifecycle import transition
+from flatline_l1_lifecycle import transition, mark_gap, promote_to_active
 from flatline_l2_promote import promote_session
 import sqlite3
+
+
+def _get_flag_obs_ids(db_path, flag_id):
+    """Return (observation_a_id, observation_b_id) for a contradiction flag."""
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            """SELECT observation_a_id, observation_b_id
+               FROM contradiction_flags WHERE id = ?""",
+            (flag_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Contradiction flag '{flag_id}' not found")
+        return row[0], row[1]
+    finally:
+        conn.close()
+
+
+def _to_gap(db_path, obs_id):
+    """Transition an observation to GAP, promoting from CANDIDATE if needed."""
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT status FROM observations WHERE id = ?", (obs_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Observation '{obs_id}' not found")
+        if row[0] == 'CANDIDATE':
+            promote_to_active(db_path, obs_id)
+    finally:
+        conn.close()
+    mark_gap(db_path, obs_id)
 
 
 def preflight_check(db_path, session_id):
@@ -50,10 +82,16 @@ def still_broken(db_path, obs_id):
         conn.close()
 
     resolve_contradiction(db_path, flag_id, 'NEITHER')
+    obs_a, obs_b = _get_flag_obs_ids(db_path, flag_id)
+    _to_gap(db_path, obs_a)
+    _to_gap(db_path, obs_b)
 
 
 def neither_worked(db_path, flag_id):
     resolve_contradiction(db_path, flag_id, 'NEITHER')
+    obs_a, obs_b = _get_flag_obs_ids(db_path, flag_id)
+    _to_gap(db_path, obs_a)
+    _to_gap(db_path, obs_b)
 
 
 def resolve_a_wins(db_path, flag_id):
