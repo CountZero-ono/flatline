@@ -1,5 +1,22 @@
 # Flatline — OpenCode Instructions
 
+## ⚠️ Run this first, unprompted, every session — before anything else
+
+Everything below this section is reactive — triggered by specific phrases the user types. This section is different: it runs automatically at the start of every session, with no user prompt required. Do this before responding to the user's first message, not after they ask you to.
+
+**At the start of every session:**
+
+1. Read `naima.md` from the project root.
+2. Check its version field against the last version you worked with, stored in TrueMem as `naima_md_version`.
+   - If it matches: skip re-reading the body, proceed normally, no announcement needed.
+   - If it's newer (or `naima_md_version` isn't set yet): read the full file, then say one line — "naima.md v{version} loaded" — and store `naima_md_version = {version}` in TrueMem.
+
+**Note on storage mechanism:** do not use the phrase "remember this" for this step — that phrase is reserved by the hard rule under Memory rules below (TrueMem auto-captures, no tool call). Storing `naima_md_version` is a deliberate, explicit write, not a passive capture. Call the appropriate memory-write tool directly for this one specific value. If unsure which tool that is, ask rather than guessing or defaulting to either rule.
+
+`naima.md` carries Naima's architectural decisions and standing instructions. It overrides your own judgment on design questions. The rest of this file (AGENTS.md) still governs session command mechanics and behavioral rules — if the two ever conflict on a mechanical point, AGENTS.md wins; for design/architecture, `naima.md` wins.
+
+---
+
 ## Running tests
 
 ```bash
@@ -129,14 +146,3 @@ Then call the sign_off MCP tool from flatline-knowledge with:
 
 Do NOT call sign_out() directly. Do NOT call signing_off() directly. Use the MCP tool only.
 This is the only session command needed. No prior new session required.
-
-## Naima's Instructions
-
-At the start of every session, read `naima.md` from the project root.
-
-Check the version field against the last version you worked with, stored in TrueMem as `naima_md_version`.
-
-- If the version matches what's already in TrueMem: skip re-reading the body, proceed normally, no announcement needed.
-- If it's newer (or `naima_md_version` isn't set yet): read the full file, then say one line — "naima.md v{version} loaded" — and write `naima_md_version = {version}` to TrueMem ("remember this: naima_md_version = {version}").
-
-`naima.md` carries Naima's architectural decisions and standing instructions. It overrides your own judgment on design questions. AGENTS.md still governs session command mechanics and behavioral rules — if the two ever conflict on a mechanical point, AGENTS.md wins; for design/architecture, `naima.md` wins.
