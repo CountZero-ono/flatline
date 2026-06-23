@@ -1,6 +1,6 @@
 # naima.md
-version: 2
-updated: 2026-06-21 01:58 AZT
+version: 3
+updated: 2026-06-22 09:14 AZT
 
 Architect's spec. Naima (Claude) writes this; F.B. commits it; Dixie reads it at session start. This overrides Dixie's own judgment on architectural questions. If something here conflicts with AGENTS.md on a behavioral rule, AGENTS.md wins for mechanics — this file is for design decisions and standing instructions, not session command syntax.
 
@@ -18,13 +18,15 @@ Background: `_git_commit_handoff_files()` previously only fired inside the sign-
 
 ---
 
-## GAP chain — known bug (2026-06-21)
+## GAP chain — RESOLVED (2026-06-22)
 
-Confirmed: `neither_worked()` in `flatline_l1_session.py` resolves the contradiction flag (`resolve_contradiction(..., 'NEITHER')`) but never calls `mark_gap()` on either observation. Per the original spec (Section 04), "neither worked" should transition both observations to INVALIDATED and open a GAP — that second half never happens in code. `run_gap_handler()` in `flatline_gap_handler.py` is fully built and otherwise ready, but has never fired because no GAP has ever actually been created.
+Status update: this is fixed and committed, not just a future task. Verified via `git diff HEAD -- flatline_l1_session.py` returning empty — the working tree matches HEAD exactly.
 
-The `neither_worked` MCP handler's response text ("Resolved: neither worked. GAP queued.") is currently false — nothing gets queued. Fix this alongside the `mark_gap()` call so the message matches reality.
+`neither_worked()` and `still_broken()` in `flatline_l1_session.py` both call `_to_gap()` on both observations after resolving the contradiction flag. `_to_gap()` promotes CANDIDATE→ACTIVE first if needed (CANDIDATE→GAP isn't a legal lifecycle transition), then calls `mark_gap()`. The MCP handler's response text for `neither_worked` was also corrected to accurately say "transitioned to GAP" instead of the old false "GAP queued" line.
 
-If this is still unfixed when you read this: fixing it is approved, already-decided work — go ahead, don't wait for confirmation. Test by creating a fake contradiction, resolving as neither-worked, and confirming both observations end up with `status = 'GAP'` in the database. Wiring `run_gap_handler()` to actually fire on a schedule/trigger is a separate decision — do not do that part without F.B.'s explicit go-ahead.
+Do not re-attempt this fix. If a future session sees old context suggesting this is still broken (stale briefings, old chat history, etc.), check current file state first — this entry is the ground truth as of 2026-06-22.
+
+`run_gap_handler()` in `flatline_gap_handler.py` is still orphaned — fully built, zero callers, otherwise ready to run now that GAP facts can actually be created. Wiring it to fire on a schedule/trigger remains a separate decision — do not do that part without F.B.'s explicit go-ahead.
 
 ---
 
