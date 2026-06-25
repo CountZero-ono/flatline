@@ -1,6 +1,6 @@
 # naima.md
-version: 3
-updated: 2026-06-22 09:14 AZT
+version: 4
+updated: 2026-06-25 22:59 AZT
 
 Architect's spec. Naima (Claude) writes this; F.B. commits it; Dixie reads it at session start. This overrides Dixie's own judgment on architectural questions. If something here conflicts with AGENTS.md on a behavioral rule, AGENTS.md wins for mechanics — this file is for design decisions and standing instructions, not session command syntax.
 
@@ -30,9 +30,9 @@ Do not re-attempt this fix. If a future session sees old context suggesting this
 
 ---
 
-## Knowledge base ingestion — schema (2026-06-21, status: DESIGN LOCKED, not yet built)
+## Knowledge base ingestion — BUILD APPROVED (2026-06-25)
 
-This applies to the upcoming `llm-wiki` / knowledge-base layer (books, PDFs, EPUBs, Obsidian clippings). Do not start building ingestion against this schema until F.B. explicitly says to proceed — as of this writing we are still clearing other pendings first.
+F.B. gave explicit go-ahead on 2026-06-25. All prior housekeeping pendings (git auto-push fix, dead code removal, GAP chain resolution, Neo4j health, spec doc v0.2) are clear. This applies to the `llm-wiki` / knowledge-base layer (books, PDFs, EPUBs, Obsidian clippings). Schema below is locked. Four previously-open implementation questions are now decided — see "Build decisions" below. Proceed with Phase 1 (Obsidian only) per that section.
 
 **KnowledgeNode is not a session Observation.** Separate label in Neo4j, same database (not a separate DB — we want graph relationships between session memory and knowledge nodes, splitting databases loses that).
 
@@ -61,4 +61,25 @@ Lifecycle is the same state machine as session observations (see AGENTS.md). A f
 
 **Ingestion order when this resumes:** Obsidian clippings first (already human-filtered, highest trust), then EPUBs, then PDFs last (most variable quality, OCR noise risk).
 
-**Open, not yet decided:** hot-folder watcher mechanics, batching size/throttle, whether `ingest_document` (existing raw chunker in flatline_mcp_server.py) gets extended or replaced outright. Do not assume the existing `ingest_document` tool is reusable as-is — it currently has no schema awareness, no dedup, no graph write. Treat it as a reference implementation for the chunking/OCR plumbing only.
+**Build decisions (2026-06-25) — resolves the four items previously left open:**
+
+1. **Qdrant collection: stay in `flatline`, don't fragment.** `flatline_l3_query.py` currently hardcodes a single collection (`COLLECTION_NAME = "flatline"`) — `flatline_summary.md`'s description of separate `knowledge`/`sessions` Qdrant collections was never actually built and should be treated as aspirational, not current state. Same call here as the Neo4j label decision: one collection, add a `node_type` payload field (`KNOWLEDGE_NODE` for KB entries). Dedup search = embed candidate chunk → query `flatline` collection filtered on `node_type: KNOWLEDGE_NODE` → compare top hit to 0.92 cosine threshold. Do not create a second Qdrant collection for this.
+
+2. **`ingest_document` stays untouched. Build new.** It has existing callers and intentionally has no schema awareness — don't retrofit dedup/graph-write logic onto it. New module: `flatline_kb_ingest.py`. Reuse `extract_text()` (flatline_mcp_server.py) and `chunk_text()` (flatline_l3_ingest.py) as plumbing only, per the existing note that they're reference implementations, not reusable as-is.
+
+3. **Hot-folder watcher: deferred, not Phase 1.** Phase 1 is a manual/explicit trigger (a new MCP tool or session command, Dixie's call on naming) that ingests a given path on demand. No filesystem watcher yet — that's a Phase 2 decision, don't build it now.
+
+4. **Batching/throttle: none needed yet.** Slots into the existing trigger priority queue (one job at a time, no concurrent Neo4j writes — already a hard rule elsewhere in this doc). Synchronous per-chunk embedding calls are fine at current corpus scale. Revisit only if real ingestion proves slow.
+
+**Phase 1 scope: Obsidian only.** Point the new ingestion path at the Obsidian vault (plain markdown on disk, already human-filtered, highest trust per the existing ingestion-order decision). EPUBs and PDFs come later, in that order — don't build all three source types at once.
+
+---
+
+## Knowledge base scope — ONE knowledge base, not two (2026-06-25)
+
+Resolving a scope question before Dixie starts: "feed it books/manuals" and "a knowledge base of problems solved with Dixie" are not two separate systems. Do not build two.
+
+- **Single store.** One Neo4j database, one Qdrant collection (per the build decisions above) — `KnowledgeNode` (books/manuals) and `Fact` (session-derived, already existing) are distinct labels/types in the *same* graph, filterable apart, joinable together. The whole point of keeping KnowledgeNode in the same database as the Fact graph is so a manual's claim and a hard-won session result can `CONTRADICTS`/`CORROBORATES` each other directly. Splitting into two KBs throws that away.
+- **"Solved with Dixie" is not a new build.** That KB already exists and is already running — it's the Fact graph, populated every sign-off by the crystallization pipeline. See the "Key Decisions & Rationale" table in `flatline_summary.md` for a hand-maintained snapshot of what's already in there (Vulkan-over-ROCm, 16GB UMA, etc.) The graph behind that table is live today. Nothing needs building for this half.
+- **The only new build approved here is books/manuals ingestion** — `KnowledgeNode`, Phase 1 = Obsidian only, per "Build decisions" above.
+- If a future session (Dixie or otherwise) is asked to build "a KB of solved problems," the correct response is: it exists, query the Fact graph — do not scaffold a parallel system. Improving *how* that table gets generated (auto-pull from the graph instead of hand-maintained) is a real future task but is explicitly out of scope right now.
