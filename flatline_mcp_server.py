@@ -26,6 +26,7 @@ from flatline_l1_session import (
 from flatline_l3_ingest import ingest_text
 from flatline_l3_query import embed, search
 from flatline_crystallizer import crystallize_session
+from flatline_kb_ingest import ingest_vault
 
 DB_PATH = os.path.expanduser("~/OCProjects/flatline/flatline.db")
 SESSION_FILE = os.path.expanduser("~/OCProjects/flatline/.current_session")
@@ -449,6 +450,17 @@ async def list_tools():
             },
         ),
         Tool(
+            name="ingest_knowledge_base",
+            description="Ingest Obsidian vault markdown files (Kitchen + Clippings) into the knowledge base. Extracts durable knowledge, deduplicates via embedding similarity, writes KnowledgeNode to Neo4j.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "vault_path": {"type": "string", "description": "Absolute or ~-expanded path to the Obsidian vault root"},
+                },
+                "required": ["vault_path"],
+            },
+        ),
+        Tool(
             name="query_sessions",
             description="Search L1 sessions by natural language, return each session's metadata and associated facts from Neo4j.",
             inputSchema={
@@ -622,6 +634,25 @@ async def call_tool(name, arguments):
             result = ingest_text(text, source_name, source_type)
             return [TextContent(type="text", text=f"Ingested {result['ingested']} chunks from {os.path.basename(path)}")]
         except Exception as e:
+            return [TextContent(type="text", text=f"Error: {e}")]
+
+    elif name == "ingest_knowledge_base":
+        vault_path = arguments["vault_path"]
+        try:
+            result = ingest_vault(vault_path)
+            if "error" in result:
+                return [TextContent(type="text", text=f"Error: {result['error']}")]
+            lines = [
+                f"Knowledge base ingestion complete.",
+                f"  Ingested: {result['ingested']} nodes",
+                f"  Skipped:  {result['skipped']} nodes",
+                f"  Deduped:  {result['deduped']} nodes",
+            ]
+            for src in result.get("sources", []):
+                lines.append(f"  - {src['file']}: {src['ingested']} ingested, {src['deduped']} deduped")
+            return [TextContent(type="text", text="\n".join(lines))]
+        except Exception as e:
+            logging.exception("KB ingestion failed")
             return [TextContent(type="text", text=f"Error: {e}")]
 
     elif name == "query_sessions":
