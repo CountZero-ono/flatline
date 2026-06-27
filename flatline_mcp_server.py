@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import sqlite3
 import subprocess
 import threading
 import requests
@@ -474,6 +475,50 @@ async def list_tools():
                 "properties": {},
             },
         ),
+        Tool(
+            name="post_task",
+            description="Post a new task for Dixie to pick up. Use this to assign coding or build tasks. Returns the task ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "Full task instructions in markdown."},
+                    "posted_by": {"type": "string", "description": "Who is posting (default: antigravity)."},
+                },
+                "required": ["content"],
+            },
+        ),
+        Tool(
+            name="read_task",
+            description="Read the next pending task. Marks it as in_progress. Returns task id and content, or empty if no pending tasks.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="post_result",
+            description="Post a result for a completed task. Called by Dixie after executing a task.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "The task ID this result belongs to."},
+                    "content": {"type": "string", "description": "Result report in markdown."},
+                    "posted_by": {"type": "string", "description": "Who is posting (default: dixie)."},
+                    "status": {"type": "string", "description": "Task outcome: done or failed (default: done)."},
+                },
+                "required": ["task_id", "content"],
+            },
+        ),
+        Tool(
+            name="read_result",
+            description="Read the result for a specific task, or the most recent result if no task_id given.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID to read result for. Optional — omit to get the latest result."},
+                },
+            },
+        ),
     ]
 
 
@@ -737,6 +782,93 @@ async def call_tool(name, arguments):
 
         summary = "\n".join(f"- {r}" for r in results)
         return [TextContent(type="text", text=f"Crystallization cancelled. Machine will stay on.\n{summary}")]
+
+    elif name == "post_task":
+        import uuid, time
+        task_id = str(uuid.uuid4())
+        content = arguments["content"]
+        posted_by = arguments.get("posted_by", "antigravity")
+        now = int(time.time())
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            conn.execute(
+                "INSERT INTO tasks (id, created_at, posted_by, status, content) VALUES (?, ?, ?, 'pending', ?)",
+                (task_id, now, posted_by, content),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return [TextContent(type="text", text=f"Task posted. id={task_id}")]
+
+    elif name == "read_task":
+        import time
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT id, content, posted_by, created_at FROM tasks WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return [TextContent(type="text", text="No pending tasks.")]
+            task_id, content, posted_by, created_at = row
+            conn.execute(
+                "UPDATE tasks SET status = 'in_progress', picked_up_at = ? WHERE id = ?",
+                (int(time.time()), task_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return [TextContent(type="text", text=f"task_id={task_id}\nposted_by={posted_by}\ncreated_at={created_at}\n\n{content}")]
+
+    elif name == "post_result":
+        import uuid, time
+        task_id = arguments["task_id"]
+        content = arguments["content"]
+        posted_by = arguments.get("posted_by", "dixie")
+        outcome = arguments.get("status", "done")
+        if outcome not in ("done", "failed"):
+            outcome = "done"
+        result_id = str(uuid.uuid4())
+        now = int(time.time())
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            row = conn.execute("SELECT id FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                return [TextContent(type="text", text=f"Error: task_id {task_id!r} not found.")]
+            conn.execute(
+                "INSERT INTO task_results (id, task_id, created_at, posted_by, content) VALUES (?, ?, ?, ?, ?)",
+                (result_id, task_id, now, posted_by, content),
+            )
+            conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (outcome, task_id))
+            conn.commit()
+        finally:
+            conn.close()
+        return [TextContent(type="text", text=f"Result recorded. result_id={result_id}, task status={outcome}")]
+
+    elif name == "read_result":
+        task_id = arguments.get("task_id")
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            if task_id:
+                row = conn.execute(
+                    "SELECT r.id, r.task_id, r.created_at, r.posted_by, r.content, t.status "
+                    "FROM task_results r JOIN tasks t ON r.task_id = t.id "
+                    "WHERE r.task_id = ? ORDER BY r.created_at DESC LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT r.id, r.task_id, r.created_at, r.posted_by, r.content, t.status "
+                    "FROM task_results r JOIN tasks t ON r.task_id = t.id "
+                    "ORDER BY r.created_at DESC LIMIT 1"
+                ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return [TextContent(type="text", text="No results found.")]
+        rid, tid, created_at, posted_by, content, task_status = row
+        return [TextContent(type="text", text=
+            f"result_id={rid}\ntask_id={tid}\ntask_status={task_status}\nposted_by={posted_by}\ncreated_at={created_at}\n\n{content}"
+        )]
 
     return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
