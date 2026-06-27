@@ -36,14 +36,9 @@ BRIEFING_FILE = os.path.join(FLATLINE_DIR, "flatline_briefing.md")
 
 def _git_commit_handoff_files(session_id: str) -> None:
     """Auto-commit handoff files on session close. Non-fatal on failure."""
-    files = [
-        "flatline_summary.md",
-        "flatline_decisions.md",
-        "flatline_briefing.md",
-    ]
     try:
         subprocess.run(
-            ["git", "add"] + files,
+            ["git", "add", "-A"],
             cwd=FLATLINE_DIR,
             check=True,
             capture_output=True,
@@ -658,8 +653,11 @@ async def call_tool(name, arguments):
     elif name == "query_sessions":
         query_text = arguments["query"]
         try:
-            vector = embed(query_text)
-            hits = search(vector, collection="sessions", limit=5)
+            hits = search(
+                query_text,
+                top_k=5,
+                filter_payload={"must": [{"key": "node_type", "match": {"value": "SESSION"}}]}
+            )
         except Exception as e:
             return [TextContent(type="text", text=f"Embed/search error: {e}")]
 
