@@ -231,6 +231,7 @@ def embed_facts(facts, session_id):
         chunk_id = int(hex_str, 16)
         metadata = {
             "fact_id": fact_id,
+            "node_type": "SESSION",
             "source_type": fact.get("source_type", "SESSION"),
             "status": fact.get("status", "CANDIDATE"),
             "decay_class": fact.get("decay_class", "TRANSIENT"),
