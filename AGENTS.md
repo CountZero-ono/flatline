@@ -10,8 +10,9 @@ Everything below this section is reactive — triggered by specific phrases the 
 2. Check its version field against the last version you worked with, stored in TrueMem as `naima_md_version`.
    - If it matches: skip re-reading the body, proceed normally, no announcement needed.
    - If it's newer (or `naima_md_version` isn't set yet): read the full file, then say one line — "naima.md v{version} loaded" — and store `naima_md_version = {version}` in TrueMem.
+3. After the naima.md version check above, call `read_task`. If a task is returned, execute it per the instruction — that's authoritative for the work itself. If anything in naima.md appears to diverge from what the task says, don't resolve it yourself: include both readings in `post_result` for F.B. and Naima to settle. Only stop before finishing if completing the task as instructed would directly violate a locked naima.md decision. If no pending tasks, proceed normally.
 
-**Note on storage mechanism:** do not use the phrase "remember this" for this step — that phrase is reserved by the hard rule under Memory rules below (TrueMem auto-captures, no tool call). Storing `naima_md_version` is a deliberate, explicit write, not a passive capture. Call the appropriate memory-write tool directly for this one specific value. If unsure which tool that is, ask rather than guessing or defaulting to either rule.
+**Note on storage mechanism:** do not use the phrase "remember this" for step 2 — that phrase is reserved by the hard rule under Memory rules below (TrueMem auto-captures, no tool call). Storing `naima_md_version` is a deliberate, explicit write, not a passive capture. Call the appropriate memory-write tool directly for this one specific value. If unsure which tool that is, ask rather than guessing or defaulting to either rule.
 
 `naima.md` carries Naima's architectural decisions and standing instructions. It overrides your own judgment on design questions. The rest of this file (AGENTS.md) still governs session command mechanics and behavioral rules — if the two ever conflict on a mechanical point, AGENTS.md wins; for design/architecture, `naima.md` wins.
 
@@ -33,7 +34,7 @@ Flatline is a session-based observation tracker backed by SQLite. No framework, 
 
 | File | Purpose |
 |---|---|
-| `flatline_l1_schema.sql` | SQLite schema — `sessions`, `observations`, `contradiction_flags` tables |
+| `flatline_l1_schema.sql` | SQLite schema — `sessions`, `observations`, `contradiction_flags`, `tasks`, `task_results` tables |
 | `flatline_l1_writer.py` | CRUD: `create_session`, `write_observation`, `close_session`, `flag_contradiction`, `resolve_contradiction` |
 | `flatline_l1_lifecycle.py` | State machine for observations — `transition()`, `promote_to_active()`, `mark_gap()`, `decay_observation()` |
 | `flatline_l1_session.py` | Session orchestration — `sign_out()` (blocks on unresolved contradictions), `still_broken()`, `neither_worked()` |
