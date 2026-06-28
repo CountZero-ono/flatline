@@ -164,7 +164,8 @@ def _is_skip_paragraph(para):
     if re.match(r'^https?://', para):
         return True
     # Ingredient list: mostly lines matching "number unit ingredient" pattern
-    if lines and all(re.match(r'^-?\s*\d', l) for l in lines if l.startswith('-') or l[0].isdigit()):
+    list_like_lines = [l for l in lines if l.startswith('-') or l[0].isdigit()]
+    if list_like_lines and all(re.match(r'^-?\s*\d', l) for l in list_like_lines):
         return True
     return False
 
