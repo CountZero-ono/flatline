@@ -2,18 +2,19 @@
 flatline_kb_ingest.py — Phase 1: Obsidian knowledge base ingestion.
 
 Ingests durable knowledge from Obsidian markdown files (Kitchen + Clippings),
-deduplicates via Qdrant embedding similarity, and writes KnowledgeNode
-entities into Neo4j with CORROBORATES relationships.
+deduplicates via Qdrant embedding similarity, and merges cross-source
+matches into existing KnowledgeNode entries (corroboration_count, sources,
+confidence) rather than creating duplicate nodes.
 
 Does NOT modify existing modules. Standalone.
 """
 
 import hashlib
 import logging
-import math
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -253,7 +254,7 @@ def extract_durable_chunks(body, source_title=""):
             para = re.sub(r'!\[.*?\]\(.*?\)', '', para).strip()
 
             # Strip image alt text descriptions: "Image shows..."
-            para = re.sub(r'Image\s+shows\s+[A-Za-z,.!?;]+\.?\s*', '', para).strip()
+            para = re.sub(r'Image\s+shows\s+[^.!?]+[.!?]\s*', '', para).strip()
 
             # Skip patterns
             if _is_skip_paragraph(para):
@@ -392,50 +393,51 @@ def search_existing_knowledge_nodes(query_vector, top_k=5):
     return results
 
 
-def is_duplicate(content, vector, top_k=3):
-    """Check if content is near-duplicate of existing KnowledgeNodes.
+def find_duplicate_node(content, vector, top_k=3):
+    """Check if content is a near-duplicate of an existing KnowledgeNode.
 
-    Returns True if any hit >= DEDUP_THRESHOLD cosine similarity.
+    Returns the matched node's id if any hit scores >= DEDUP_THRESHOLD,
+    otherwise None. Returning the id (not just True/False) is what lets
+    the caller corroborate the existing node instead of silently
+    discarding the match.
     """
     hits = search_existing_knowledge_nodes(vector, top_k=top_k)
     for hit in hits:
-        if hit["score"] >= DEDUP_THRESHOLD:
-            return True  # duplicate found
-    return False
+        if hit["score"] >= DEDUP_THRESHOLD and hit.get("node_id"):
+            return hit["node_id"]
+    return None
 
 
 # ── Neo4j write ──────────────────────────────────────────────────────────
 
-def write_knowledge_node(session, node_id, content, source_title,
-                         source_chunk_ref, decay_class, confidence,
-                         existing_node_ids=None):
-    """Upsert a KnowledgeNode into Neo4j.
+def create_knowledge_node(session, node_id, content, source_title,
+                           source_chunk_ref, decay_class, confidence,
+                           embedding_id):
+    """Create a brand-new KnowledgeNode.
 
-    If the node already exists (matched by node_id), increments
-    corroboration_count and updates confidence.
-
-    existing_node_ids: set of known node_ids for this source (used to
-    create CORROBORATES links between nodes from the same source).
+    node_id is a freshly generated UUID (the schema's `id` field — not a
+    content hash). Identity for dedup purposes lives in Qdrant embedding
+    similarity (find_duplicate_node), not in this id, so the id can be a
+    plain random UUID per the locked schema instead of a deterministic
+    hash. `sources` starts as a one-element list; corroborate_knowledge_node
+    appends to it on every later cross-source match.
     """
     now = int(time.time())
     session.run(
         """
-        MERGE (n:KnowledgeNode {node_id: $node_id})
-        ON CREATE SET
-          n.content = $content,
-          n.source_title = $source_title,
-          n.source_chunk_ref = $source_chunk_ref,
-          n.decay_class = $decay_class,
-          n.confidence = $confidence,
-          n.status = 'CANDIDATE',
-          n.ingested_at = $now,
-          n.corroboration_count = 1
-        ON MATCH SET
-          n.content = $content,
-          n.source_chunk_ref = $source_chunk_ref,
-          n.confidence = CASE WHEN $confidence > n.confidence THEN $confidence ELSE n.confidence END,
-          n.corroboration_count = n.corroboration_count + 1,
-          n.ingested_at = $now
+        CREATE (n:KnowledgeNode {
+          id: $node_id,
+          content: $content,
+          source_title: $source_title,
+          source_chunk_ref: $source_chunk_ref,
+          decay_class: $decay_class,
+          confidence: $confidence,
+          status: 'CANDIDATE',
+          ingested_at: $now,
+          embedding_id: $embedding_id,
+          corroboration_count: 1,
+          sources: [$source_descriptor]
+        })
         """,
         node_id=node_id,
         content=content,
@@ -444,19 +446,41 @@ def write_knowledge_node(session, node_id, content, source_title,
         decay_class=decay_class,
         confidence=confidence,
         now=now,
+        embedding_id=embedding_id,
+        source_descriptor=f"{source_title}::{source_chunk_ref}",
     )
 
 
-def add_corroborates(session, node_id_a, node_id_b):
-    """Create a CORROBORATES relationship between two KnowledgeNodes."""
+def corroborate_knowledge_node(session, node_id, source_title, source_chunk_ref):
+    """A new chunk matched an existing KnowledgeNode at/above DEDUP_THRESHOLD.
+
+    Per spec: "do not create a new node; increment corroboration_count on
+    the existing node, add the new source to its source list, and let
+    confidence rise accordingly." This is that path — the one the old
+    code never actually took.
+
+    Confidence rises asymptotically toward 1.0 (diminishing return per
+    corroborating hit) rather than the old `CASE WHEN $confidence >
+    n.confidence` comparison, which could never fire because every
+    ingest call passed the same hardcoded 0.8.
+
+    Note: this updates the existing node's properties only. It does not
+    create a graph relationship for the match. The spec's CORROBORATES
+    relationship is described as pointing "from a source/chunk" to the
+    node — there's no Source/Chunk node type in the locked schema to be
+    the other endpoint of that edge. Introducing one is a real design
+    decision (new label, new relationship semantics), not a bug fix —
+    flagging for naima.md, not deciding it here.
+    """
     session.run(
         """
-        MATCH (a:KnowledgeNode {node_id: $a})
-        MATCH (b:KnowledgeNode {node_id: $b})
-        MERGE (a)-[r:CORROBORATES]->(b)
-        RETURN count(r)
+        MATCH (n:KnowledgeNode {id: $node_id})
+        SET n.corroboration_count = n.corroboration_count + 1,
+            n.sources = coalesce(n.sources, []) + [$source_descriptor],
+            n.confidence = n.confidence + (1.0 - n.confidence) * 0.1
         """,
-        a=node_id_a, b=node_id_b,
+        node_id=node_id,
+        source_descriptor=f"{source_title}::{source_chunk_ref}",
     )
 
 
@@ -494,11 +518,16 @@ def discover_vault_files(vault_path, subdirs=None):
 
 # ── Qdrant payload upsert (for KnowledgeNode vectors) ────────────────────
 
-def upsert_knowledge_node_vector(chunk_id, content, metadata):
-    """Embed content and upsert a single point to the flatline collection
-    with node_type: KNOWLEDGE_NODE payload.
+def upsert_knowledge_node_vector(chunk_id, content, vector, metadata):
+    """Upsert a single point to the flatline collection with
+    node_type: KNOWLEDGE_NODE payload.
+
+    Takes the embedding vector as a parameter instead of re-embedding —
+    the caller already computed it for the dedup check in find_duplicate_node.
+    Re-embedding here was a redundant network round-trip per chunk and
+    opened a (small, theoretical) window for the dedup vector and the
+    stored vector to diverge.
     """
-    vector = embed(content)
     payload = {
         "collection_name": COLLECTION_NAME,
         "operations": [
@@ -550,15 +579,11 @@ def ingest_file(file_path, neo4j_session):
         return {"ingested": 0, "skipped": 0, "deduped": 0, "source": source_title}
 
     stats = {"ingested": 0, "skipped": 0, "deduped": 0, "source": source_title}
-    node_ids = []  # track node_ids for CORROBORATES within source
 
     for chunk in chunks:
-        # Generate stable node_id
-        key = f"{source_name}:{chunk['source_chunk_ref']}:{chunk['content'][:80]}"
-        hex_str = hashlib.sha256(key.encode()).hexdigest()[:16]
-        node_id = f"kb:{hex_str}"
-
-        # Dedup check
+        # Dedup check — this is the only identity check that matters.
+        # (No more content-hash node_id: cross-source paraphrases need to
+        # match here via embedding similarity, which a hash could never do.)
         try:
             vector = _embed(chunk["content"])
         except Exception as e:
@@ -566,13 +591,26 @@ def ingest_file(file_path, neo4j_session):
             stats["skipped"] += 1
             continue
 
-        if is_duplicate(chunk["content"], vector):
-            stats["deduped"] += 1
+        matched_node_id = find_duplicate_node(chunk["content"], vector)
+
+        if matched_node_id:
+            try:
+                corroborate_knowledge_node(
+                    neo4j_session, matched_node_id,
+                    source_title, chunk["source_chunk_ref"],
+                )
+                stats["deduped"] += 1
+            except Exception as e:
+                logger.error("Corroboration update failed for %s: %s", matched_node_id, e)
+                stats["skipped"] += 1
             continue
 
-        # Write to Neo4j
+        # No match — new node. id is a real UUID per the locked schema.
+        node_id = str(uuid.uuid4())
+        chunk_id = int(hashlib.md5(node_id.encode()).hexdigest()[:8], 16)
+
         try:
-            write_knowledge_node(
+            create_knowledge_node(
                 neo4j_session,
                 node_id=node_id,
                 content=chunk["content"],
@@ -580,14 +618,15 @@ def ingest_file(file_path, neo4j_session):
                 source_chunk_ref=chunk["source_chunk_ref"],
                 decay_class=chunk["decay_class"],
                 confidence=0.8,  # Phase 1 default for Obsidian content
+                embedding_id=str(chunk_id),
             )
-            node_ids.append(node_id)
 
-            # Upsert vector into Qdrant
-            chunk_id = int(hashlib.md5(node_id.encode()).hexdigest()[:8], 16)
+            # Upsert vector into Qdrant — same vector already used for
+            # the dedup check above, not re-embedded.
             upsert_knowledge_node_vector(
                 chunk_id,
                 chunk["content"],
+                vector,
                 {
                     "node_id": node_id,
                     "source_title": source_title,
@@ -598,16 +637,8 @@ def ingest_file(file_path, neo4j_session):
             )
             stats["ingested"] += 1
         except Exception as e:
-            logger.error("Neo4j write failed for %s: %s", node_id, e)
+            logger.error("Neo4j/Qdrant write failed for %s: %s", node_id, e)
             stats["skipped"] += 1
-
-    # Create CORROBORATES links between nodes from the same source
-    if len(node_ids) >= 2:
-        for i in range(len(node_ids) - 1):
-            try:
-                add_corroborates(neo4j_session, node_ids[i], node_ids[i + 1])
-            except Exception as e:
-                logger.warning("CORROBORATES link failed: %s", e)
 
     return stats
 
