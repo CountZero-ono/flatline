@@ -1,8 +1,28 @@
 # naima.md
-version: 4
-updated: 2026-06-25 22:59 AZT
+version: 5
+updated: 2026-06-30 02:50 AZT
 
 Architect's spec. Naima (Claude) writes this; F.B. commits it; Dixie reads it at session start. This overrides Dixie's own judgment on architectural questions. If something here conflicts with AGENTS.md on a behavioral rule, AGENTS.md wins for mechanics — this file is for design decisions and standing instructions, not session command syntax.
+
+---
+
+## Model quant: IQ3_S (2026-06-30)
+
+Dixie's primary inference model switched from Q3_K_M to **IQ3_S** on 2026-06-30. F.B.'s explicit decision — lower UMA pressure, fewer memory spills, faster.
+
+**Benchmark results (spec-draft-n-max=2, Qwen3.6 35B A3B MTP):**
+
+| Run | Prompt source | Draft acceptance | Throughput |
+|-----|--------------|-----------------|------------|
+| IQ3_S, n=2 | synthetic (n=10) | 79.2% | 33.7 tok/s |
+| IQ3_S, n=2 | real session content (n=15) | 80.1% | 33.8 tok/s |
+| Q3_K_M (prior baseline) | — | 83% | ~30 tok/s |
+
+Net: -3pts draft acceptance, +13% throughput. Two independent prompt sources landed within 1 point of each other — consistent, not noise.
+
+Update `flatline_summary.md` to reflect IQ3_S everywhere Q3_K_M appears in the infrastructure table, two-model strategy table, and decisions table. The VALIDATED MTP decision row stays — the decision was `spec-type draft-mtp, n=2`, which is unchanged. Only the quant designation changes.
+
+**Note:** spec-draft-n-max was drifted to 3 at some point before this benchmark — the n=2 override restored the correct setting and is what produced the final numbers above. Confirm the service override is locked to n=2.
 
 ---
 
