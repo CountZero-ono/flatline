@@ -1,28 +1,8 @@
 # naima.md
-version: 5
-updated: 2026-06-30 02:50 AZT
+version: 3
+updated: 2026-06-30 AZT
 
 Architect's spec. Naima (Claude) writes this; F.B. commits it; Dixie reads it at session start. This overrides Dixie's own judgment on architectural questions. If something here conflicts with AGENTS.md on a behavioral rule, AGENTS.md wins for mechanics — this file is for design decisions and standing instructions, not session command syntax.
-
----
-
-## Model quant: IQ3_S (2026-06-30)
-
-Dixie's primary inference model switched from Q3_K_M to **IQ3_S** on 2026-06-30. F.B.'s explicit decision — lower UMA pressure, fewer memory spills, faster.
-
-**Benchmark results (spec-draft-n-max=2, Qwen3.6 35B A3B MTP):**
-
-| Run | Prompt source | Draft acceptance | Throughput |
-|-----|--------------|-----------------|------------|
-| IQ3_S, n=2 | synthetic (n=10) | 79.2% | 33.7 tok/s |
-| IQ3_S, n=2 | real session content (n=15) | 80.1% | 33.8 tok/s |
-| Q3_K_M (prior baseline) | — | 83% | ~30 tok/s |
-
-Net: -3pts draft acceptance, +13% throughput. Two independent prompt sources landed within 1 point of each other — consistent, not noise.
-
-Update `flatline_summary.md` to reflect IQ3_S everywhere Q3_K_M appears in the infrastructure table, two-model strategy table, and decisions table. The VALIDATED MTP decision row stays — the decision was `spec-type draft-mtp, n=2`, which is unchanged. Only the quant designation changes.
-
-**Note:** spec-draft-n-max was drifted to 3 at some point before this benchmark — the n=2 override restored the correct setting and is what produced the final numbers above. Confirm the service override is locked to n=2.
 
 ---
 
@@ -38,21 +18,19 @@ Background: `_git_commit_handoff_files()` previously only fired inside the sign-
 
 ---
 
-## GAP chain — RESOLVED (2026-06-22)
+## GAP chain — status check needed (2026-06-21, revisit)
 
-Status update: this is fixed and committed, not just a future task. Verified via `git diff HEAD -- flatline_l1_session.py` returning empty — the working tree matches HEAD exactly.
+naima.md v2 flagged `neither_worked()` as missing its `mark_gap()` call. Current repo copy of `flatline_l1_session.py` (reviewed 2026-06-30) shows both `still_broken()` and `neither_worked()` calling a shared `_to_gap()` helper on both observations, which promotes CANDIDATE→ACTIVE→GAP correctly. This looks fixed.
 
-`neither_worked()` and `still_broken()` in `flatline_l1_session.py` both call `_to_gap()` on both observations after resolving the contradiction flag. `_to_gap()` promotes CANDIDATE→ACTIVE first if needed (CANDIDATE→GAP isn't a legal lifecycle transition), then calls `mark_gap()`. The MCP handler's response text for `neither_worked` was also corrected to accurately say "transitioned to GAP" instead of the old false "GAP queued" line.
-
-Do not re-attempt this fix. If a future session sees old context suggesting this is still broken (stale briefings, old chat history, etc.), check current file state first — this entry is the ground truth as of 2026-06-22.
-
-`run_gap_handler()` in `flatline_gap_handler.py` is still orphaned — fully built, zero callers, otherwise ready to run now that GAP facts can actually be created. Wiring it to fire on a schedule/trigger remains a separate decision — do not do that part without F.B.'s explicit go-ahead.
+**Do not treat this as confirmed until verified against a fresh, fully-unshallowed clone of `origin/main`** — per standing rule, Naima never trusts a pasted file over a direct repo check, and this file may be stale relative to what's actually deployed. If verification confirms the fix is live: close this item, and confirm `run_gap_handler()` wiring is still correctly *not* auto-triggered (that part remains a separate decision requiring F.B.'s explicit go-ahead, unchanged from v2).
 
 ---
 
-## Knowledge base ingestion — BUILD APPROVED (2026-06-25)
+## Knowledge base ingestion — schema (2026-06-30, status: APPROVED, build in progress)
 
-F.B. gave explicit go-ahead on 2026-06-25. All prior housekeeping pendings (git auto-push fix, dead code removal, GAP chain resolution, Neo4j health, spec doc v0.2) are clear. This applies to the `llm-wiki` / knowledge-base layer (books, PDFs, EPUBs, Obsidian clippings). Schema below is locked. Four previously-open implementation questions are now decided — see "Build decisions" below. Proceed with Phase 1 (Obsidian only) per that section.
+**Gate lifted 2026-06-30.** F.B. gave explicit go-ahead to begin. This supersedes the "do not start building" hold from v2.
+
+This applies to the `llm-wiki` / knowledge-base layer (books, PDFs, EPUBs, Obsidian clippings, plus library content staged through Open Notebook — see Ingestion Tooling below).
 
 **KnowledgeNode is not a session Observation.** Separate label in Neo4j, same database (not a separate DB — we want graph relationships between session memory and knowledge nodes, splitting databases loses that).
 
@@ -77,29 +55,19 @@ Lifecycle is the same state machine as session observations (see AGENTS.md). A f
 
 **Relationship:** `CORROBORATES` — points from a source/chunk to the KnowledgeNode it confirms. This is the conflict-resolution primitive: three books agreeing converges to one node with three corroborating sources and higher confidence, not three duplicate nodes.
 
-**Chunking principle:** extract durable technique-level knowledge, not procedural recipe steps. Example (fermentation domain): "lacto-fermentation requires sufficient salt concentration to suppress pathogenic bacteria" is a correct chunk. "Add 2% salt by weight to shredded cabbage" is not — too procedural, too source-specific, won't corroborate well across sources.
+**Chunking principle — REVISED 2026-06-30 (replaces v2's "technique not procedure" rule).**
+
+v2 drew the line as binary: extract technique-level knowledge, reject procedural recipe steps. That rule doesn't survive contact with real material — some procedural-looking content (fermentation salt ratios, brine percentages) actually does corroborate cleanly across sources because it reduces to a small number of discrete, source-independent parameters. Other content (a specific recipe's step sequence) genuinely doesn't generalize and shouldn't be forced into a "principle."
+
+**The real test is not technique-vs-procedure. It's: does this content express a generalizable parameter — a rate, ratio, percentage, or formula — that would converge across multiple independent sources?**
+
+- **If yes:** extract the parameter itself, normalized, independent of how the source phrased it. "2% salt by weight," "use 20g salt per kg of vegetables," and "2g per 100g" are the same fact and must converge to the same KnowledgeNode via embedding similarity — phrase the extracted `content` in a normalized form (e.g. "vegetable lacto-fermentation: 2% salt by weight of vegetable mass") so embedding similarity actually catches the convergence rather than three near-duplicate nodes sitting unmerged. This is what lets Dixie answer "I have 500g carrots and 500g cabbage, what's the salt ratio" or "this apple juice is at 1.5% sugar, how much do I add" — it does the arithmetic against the stored rate at query time, not against a cached worked example.
+- **If no:** store it as a paraphrased procedure in the same node type, same schema fields — there is no separate ProcedureNode, that idea was floated and explicitly rejected 2026-06-30. A multi-step, sequence-dependent recipe (e.g. a specific curry) doesn't reduce to a rate and shouldn't be force-fit into one; store it close to the source's actual sequence, still paraphrased per copyright handling, still tagged with `source_chunk_ref` so it's traceable.
+
+One node type. The decision of "rate vs procedure" is made per-chunk at extraction time, not by routing into different schema structures.
 
 **Ingestion order when this resumes:** Obsidian clippings first (already human-filtered, highest trust), then EPUBs, then PDFs last (most variable quality, OCR noise risk).
 
-**Build decisions (2026-06-25) — resolves the four items previously left open:**
+**Ingestion tooling (2026-06-30):** Open Notebook (self-hosted, MIT-licensed, `lfnovo/open-notebook`) is the approved extraction workbench for staging library content before it hits the ingestion pipeline. Point its model provider at Dixie's existing llama-server endpoint (port 1235) rather than a cloud provider — this keeps the no-cloud-runtime commitment intact, since Open Notebook supports local model backends via the same Ollama-compatible interface. Its REST API (localhost:5055) makes this scriptable rather than manual-click-through, unlike NotebookLM (no public API, cloud-only, evaluated and rejected 2026-06-30 for this reason). Open Notebook itself is **not** part of the runtime system — it is prep tooling. Its job ends at producing structured extracts (flat JSON/CSV matching the KnowledgeNode fields above); those extracts land in the repo as files, and the actual ingestion script reads from disk like any other source. Do not wire Open Notebook into the live ingestion path as a standing dependency.
 
-1. **Qdrant collection: stay in `flatline`, don't fragment.** `flatline_l3_query.py` currently hardcodes a single collection (`COLLECTION_NAME = "flatline"`) — `flatline_summary.md`'s description of separate `knowledge`/`sessions` Qdrant collections was never actually built and should be treated as aspirational, not current state. Same call here as the Neo4j label decision: one collection, add a `node_type` payload field (`KNOWLEDGE_NODE` for KB entries). Dedup search = embed candidate chunk → query `flatline` collection filtered on `node_type: KNOWLEDGE_NODE` → compare top hit to 0.92 cosine threshold. Do not create a second Qdrant collection for this.
-
-2. **`ingest_document` stays untouched. Build new.** It has existing callers and intentionally has no schema awareness — don't retrofit dedup/graph-write logic onto it. New module: `flatline_kb_ingest.py`. Reuse `extract_text()` (flatline_mcp_server.py) and `chunk_text()` (flatline_l3_ingest.py) as plumbing only, per the existing note that they're reference implementations, not reusable as-is.
-
-3. **Hot-folder watcher: deferred, not Phase 1.** Phase 1 is a manual/explicit trigger (a new MCP tool or session command, Dixie's call on naming) that ingests a given path on demand. No filesystem watcher yet — that's a Phase 2 decision, don't build it now.
-
-4. **Batching/throttle: none needed yet.** Slots into the existing trigger priority queue (one job at a time, no concurrent Neo4j writes — already a hard rule elsewhere in this doc). Synchronous per-chunk embedding calls are fine at current corpus scale. Revisit only if real ingestion proves slow.
-
-**Phase 1 scope: Obsidian only.** Point the new ingestion path at the Obsidian vault (plain markdown on disk, already human-filtered, highest trust per the existing ingestion-order decision). EPUBs and PDFs come later, in that order — don't build all three source types at once.
-
----
-
-## Knowledge base scope — ONE knowledge base, not two (2026-06-25)
-
-Resolving a scope question before Dixie starts: "feed it books/manuals" and "a knowledge base of problems solved with Dixie" are not two separate systems. Do not build two.
-
-- **Single store.** One Neo4j database, one Qdrant collection (per the build decisions above) — `KnowledgeNode` (books/manuals) and `Fact` (session-derived, already existing) are distinct labels/types in the *same* graph, filterable apart, joinable together. The whole point of keeping KnowledgeNode in the same database as the Fact graph is so a manual's claim and a hard-won session result can `CONTRADICTS`/`CORROBORATES` each other directly. Splitting into two KBs throws that away.
-- **"Solved with Dixie" is not a new build.** That KB already exists and is already running — it's the Fact graph, populated every sign-off by the crystallization pipeline. See the "Key Decisions & Rationale" table in `flatline_summary.md` for a hand-maintained snapshot of what's already in there (Vulkan-over-ROCm, 16GB UMA, etc.) The graph behind that table is live today. Nothing needs building for this half.
-- **The only new build approved here is books/manuals ingestion** — `KnowledgeNode`, Phase 1 = Obsidian only, per "Build decisions" above.
-- If a future session (Dixie or otherwise) is asked to build "a KB of solved problems," the correct response is: it exists, query the Fact graph — do not scaffold a parallel system. Improving *how* that table gets generated (auto-pull from the graph instead of hand-maintained) is a real future task but is explicitly out of scope right now.
+**Open, not yet decided:** hot-folder watcher mechanics, batching size/throttle, whether `ingest_document` (existing raw chunker in flatline_mcp_server.py) gets extended or replaced outright. Do not assume the existing `ingest_document` tool is reusable as-is — it currently has no schema awareness, no dedup, no graph write. Treat it as a reference implementation for the chunking/OCR plumbing only.
