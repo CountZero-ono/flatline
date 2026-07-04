@@ -535,7 +535,7 @@ Two separate ingestion pipelines, both terminating in Qdrant's single "flatline"
 | File | Purpose |
 |------|---------|
 | `flatline_mcp_server.py` | `hand_off` standalone function (line 232) + MCP handler — queries TrueMem L1, MemMachine L2, git diff; writes `flatline_briefing.md` |
-| `flatline_briefing.md` | Generated snapshot for Naima — last 3 days of entries from `flatline_summary.md`, overwritten each `hand_off`, terse schema-filled format |
+| `flatline_briefing.md` | Generated snapshot for Naima — queries TrueMem (L1 observations), MemMachine (L2 Neo4j nodes/contradictions), and `git diff --stat`; overwritten each `hand_off` call and again automatically at `sign_off`; terse schema-filled format. Does not read `flatline_summary.md` — corrected 2026-07-05, prior version wrongly claimed it did. |
 
 - **Intent**: `sign_off` creates session, ingests Dixie-extracted observations, runs `sign_out`, crystallizes in background thread, generates briefing (in-thread), machine stays on. `hand_off` prepares the briefing standalone. `sign_off` calls `hand_off` internally within the thread.
 - **Scope**: reads TrueMem (L1) + MemMachine (L2) + git diff — does not ask Dixie to remember anything, only reads what the system already recorded
