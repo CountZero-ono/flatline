@@ -354,10 +354,13 @@ def _embed(text):
     return embed(text)
 
 
-def search_existing_knowledge_nodes(query_vector, top_k=5):
+def search_existing_knowledge_nodes(query_vector, owner, top_k=5):
     """Search Qdrant for existing KnowledgeNode entries.
 
-    Filters on node_type: KNOWLEDGE_NODE payload field.
+    Filters on node_type: KNOWLEDGE_NODE AND owner. Owner scoping is
+    required, not optional — dedup/corroboration must never match a
+    chunk against a different owner's material, even if two people's
+    content happens to score above DEDUP_THRESHOLD by coincidence.
     Returns list of {id, score, content} for hits above threshold.
     """
     filter_payload = {
@@ -365,6 +368,10 @@ def search_existing_knowledge_nodes(query_vector, top_k=5):
             {
                 "key": "node_type",
                 "match": {"value": "KNOWLEDGE_NODE"}
+            },
+            {
+                "key": "owner",
+                "match": {"value": owner}
             }
         ]
     }
@@ -394,15 +401,18 @@ def search_existing_knowledge_nodes(query_vector, top_k=5):
     return results
 
 
-def find_duplicate_node(content, vector, top_k=3):
+def find_duplicate_node(content, vector, owner, top_k=3):
     """Check if content is a near-duplicate of an existing KnowledgeNode.
+
+    owner is required and scopes the dedup search — see
+    search_existing_knowledge_nodes for why.
 
     Returns the matched node's id if any hit scores >= DEDUP_THRESHOLD,
     otherwise None. Returning the id (not just True/False) is what lets
     the caller corroborate the existing node instead of silently
     discarding the match.
     """
-    hits = search_existing_knowledge_nodes(vector, top_k=top_k)
+    hits = search_existing_knowledge_nodes(vector, owner, top_k=top_k)
     for hit in hits:
         if hit["score"] >= DEDUP_THRESHOLD and hit.get("node_id"):
             return hit["node_id"]
@@ -413,8 +423,13 @@ def find_duplicate_node(content, vector, top_k=3):
 
 def create_knowledge_node(session, node_id, content, source_title,
                            source_chunk_ref, decay_class, confidence,
-                           embedding_id):
+                           embedding_id, owner):
     """Create a brand-new KnowledgeNode.
+
+    owner is required, no default — this field identifies whose material
+    the node came from (e.g. "fuad", "veronika"). No implicit fallback
+    on purpose: a missing owner should fail loudly at call time, not
+    silently attribute someone's documents to the wrong person.
 
     node_id is a freshly generated UUID (the schema's `id` field — not a
     content hash). Identity for dedup purposes lives in Qdrant embedding
@@ -437,7 +452,8 @@ def create_knowledge_node(session, node_id, content, source_title,
           ingested_at: $now,
           embedding_id: $embedding_id,
           corroboration_count: 1,
-          sources: [$source_descriptor]
+          sources: [$source_descriptor],
+          owner: $owner
         })
         """,
         node_id=node_id,
@@ -449,6 +465,7 @@ def create_knowledge_node(session, node_id, content, source_title,
         now=now,
         embedding_id=embedding_id,
         source_descriptor=f"{source_title}::{source_chunk_ref}",
+        owner=owner,
     )
 
 
@@ -557,8 +574,12 @@ def upsert_knowledge_node_vector(chunk_id, content, vector, metadata):
 
 # ── Core ingestion pipeline ──────────────────────────────────────────────
 
-def ingest_file(file_path, neo4j_session):
+def ingest_file(file_path, neo4j_session, owner):
     """Ingest a single Obsidian markdown file.
+
+    owner is required, no default — identifies whose vault this file
+    came from (e.g. "fuad", "veronika"). Every KnowledgeNode created or
+    corroborated from this file is scoped to this owner.
 
     Returns dict with stats: {ingested, skipped, deduped, source}.
     """
@@ -592,7 +613,7 @@ def ingest_file(file_path, neo4j_session):
             stats["skipped"] += 1
             continue
 
-        matched_node_id = find_duplicate_node(chunk["content"], vector)
+        matched_node_id = find_duplicate_node(chunk["content"], vector, owner)
 
         if matched_node_id:
             try:
@@ -620,10 +641,13 @@ def ingest_file(file_path, neo4j_session):
                 decay_class=chunk["decay_class"],
                 confidence=0.8,  # Phase 1 default for Obsidian content
                 embedding_id=str(chunk_id),
+                owner=owner,
             )
 
             # Upsert vector into Qdrant — same vector already used for
-            # the dedup check above, not re-embedded.
+            # the dedup check above, not re-embedded. owner in the
+            # payload is what search_existing_knowledge_nodes actually
+            # filters on — this is the load-bearing copy of the field.
             upsert_knowledge_node_vector(
                 chunk_id,
                 chunk["content"],
@@ -634,6 +658,7 @@ def ingest_file(file_path, neo4j_session):
                     "source_chunk_ref": chunk["source_chunk_ref"],
                     "decay_class": chunk["decay_class"],
                     "confidence": 0.8,
+                    "owner": owner,
                 },
             )
             stats["ingested"] += 1
@@ -644,8 +669,15 @@ def ingest_file(file_path, neo4j_session):
     return stats
 
 
-def ingest_vault(vault_path, subdirs=None):
+def ingest_vault(vault_path, owner, subdirs=None):
     """Ingest all Obsidian markdown files in the vault.
+
+    owner is required, no default. Every caller must state whose vault
+    this is — e.g. ingest_vault(path, owner="fuad") or
+    ingest_vault(path, owner="veronika"). No fallback identity: a missing
+    owner should fail loudly (TypeError, right here, at call time)
+    rather than silently attributing someone's documents to the wrong
+    person in the graph.
 
     Returns aggregated stats dict.
     """
@@ -668,7 +700,7 @@ def ingest_vault(vault_path, subdirs=None):
     try:
         with driver.session() as session:
             for file_path in files:
-                stats = ingest_file(file_path, session)
+                stats = ingest_file(file_path, session, owner)
                 total_stats["ingested"] += stats["ingested"]
                 total_stats["skipped"] += stats["skipped"]
                 total_stats["deduped"] += stats["deduped"]
