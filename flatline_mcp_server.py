@@ -447,13 +447,14 @@ async def list_tools():
         ),
         Tool(
             name="ingest_knowledge_base",
-            description="Ingest Obsidian vault markdown files (Kitchen + Clippings) into the knowledge base. Extracts durable knowledge, deduplicates via embedding similarity, writes KnowledgeNode to Neo4j.",
+            description="Ingest Obsidian vault markdown files (Kitchen + Clippings) into the knowledge base. Extracts durable knowledge, deduplicates via embedding similarity scoped to the given owner, writes KnowledgeNode to Neo4j.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "vault_path": {"type": "string", "description": "Absolute or ~-expanded path to the Obsidian vault root"},
+                    "owner": {"type": "string", "description": "Whose vault this is, e.g. 'fuad' or 'veronika'. Required — no default owner."},
                 },
-                "required": ["vault_path"],
+                "required": ["vault_path", "owner"],
             },
         ),
         Tool(
@@ -678,8 +679,9 @@ async def call_tool(name, arguments):
 
     elif name == "ingest_knowledge_base":
         vault_path = arguments["vault_path"]
+        owner = arguments["owner"]
         try:
-            result = ingest_vault(vault_path)
+            result = ingest_vault(vault_path, owner)
             if "error" in result:
                 return [TextContent(type="text", text=f"Error: {result['error']}")]
             lines = [

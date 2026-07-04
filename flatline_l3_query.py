@@ -46,8 +46,14 @@ def ensure_collection():
         raise RuntimeError(f"Qdrant create-collection failed: {resp.status_code} {resp.text}")
 
 
-def search(query_text, top_k=TOP_K, filter_payload=None, collection=None):
-    """Searches the flatline collection for the most similar points."""
+def search(query_text, top_k=TOP_K, filter_payload=None):
+    """Searches the flatline collection for the most similar points.
+
+    Note: this system uses a single Qdrant collection ("flatline") with
+    node_type / owner metadata filtering rather than separate named
+    collections. Scope your query via filter_payload, e.g.:
+        {"must": [{"key": "node_type", "match": {"value": "SESSION"}}]}
+    """
     if isinstance(query_text, list):
         vector = query_text
     else:
