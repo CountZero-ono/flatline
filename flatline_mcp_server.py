@@ -36,14 +36,36 @@ BRIEFING_FILE = os.path.join(FLATLINE_DIR, "flatline_briefing.md")
 
 
 def _git_commit_handoff_files(session_id: str) -> None:
-    """Auto-commit handoff files on session close. Non-fatal on failure."""
+    """Auto-commit handoff files on session close. Non-fatal on failure.
+
+    Scoped, not blanket. Per naima.md git hygiene: code changes get
+    committed as they're made, not batched at sign-off time. sign_off
+    only owns the briefing (and, if present, the crystallization result
+    log) — it must never sweep in whatever else happens to be sitting
+    uncommitted in the working tree (in-progress code edits, new
+    untracked files, etc). That's a scoped `git add`, not `-A`.
+    """
+    HANDOFF_OWNED_FILES = [
+        "flatline_briefing.md",
+    ]
     try:
+        existing = [f for f in HANDOFF_OWNED_FILES if os.path.exists(os.path.join(FLATLINE_DIR, f))]
+        if not existing:
+            return
         subprocess.run(
-            ["git", "add", "-A"],
+            ["git", "add", *existing],
             cwd=FLATLINE_DIR,
             check=True,
             capture_output=True,
         )
+        # Nothing staged (e.g. briefing unchanged since last commit) —
+        # skip the commit rather than erroring on "nothing to commit".
+        diff_check = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=FLATLINE_DIR,
+        )
+        if diff_check.returncode == 0:
+            return
         msg = f"session close: {session_id} — {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}"
         subprocess.run(
             ["git", "commit", "-m", msg],
@@ -630,6 +652,19 @@ async def call_tool(name, arguments):
                         result["facts"] = _result.get("facts", 0)
                 finally:
                     _driver.close()
+
+                # Regenerate the briefing fresh, right before committing —
+                # this was previously missing entirely. sign_off claimed
+                # (per flatline_summary.md) to generate the handoff
+                # briefing within this thread, but hand_off() was never
+                # actually called here. Without this, the committed
+                # briefing could be an arbitrarily old snapshot from
+                # whenever someone last ran the standalone 'hand off'
+                # command — stale by definition, not just by accident.
+                try:
+                    hand_off(sid, session_description=(annot or "Automated session close"))
+                except Exception as e:
+                    logging.warning(f"hand_off briefing regeneration failed: {e}")
 
                 _git_commit_handoff_files(sid)
             except Exception as e:
