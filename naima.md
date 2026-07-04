@@ -1,6 +1,6 @@
 # naima.md
-version: 6
-updated: 2026-06-30 AZT
+version: 7
+updated: 2026-07-05 AZT
 
 Architect's spec. Naima (Claude) writes this; F.B. commits it; Dixie reads it at session start. This overrides Dixie's own judgment on architectural questions. If something here conflicts with AGENTS.md on a behavioral rule, AGENTS.md wins for mechanics — this file is for design decisions and standing instructions, not session command syntax.
 
@@ -18,11 +18,19 @@ Background: `_git_commit_handoff_files()` previously only fired inside the sign-
 
 ---
 
-## GAP chain — status check needed (2026-06-21, revisit)
+## GAP chain — CONFIRMED FIXED (2026-07-05)
 
-naima.md v2 flagged `neither_worked()` as missing its `mark_gap()` call. Current repo copy of `flatline_l1_session.py` (reviewed 2026-06-30) shows both `still_broken()` and `neither_worked()` calling a shared `_to_gap()` helper on both observations, which promotes CANDIDATE→ACTIVE→GAP correctly. This looks fixed.
+Closing this out. v2 flagged `neither_worked()` for missing its `mark_gap()` call. v6 noted it *looked* fixed but explicitly withheld confirmation pending a check against a fresh, unshallowed `origin/main` clone rather than a pasted file.
 
-**Do not treat this as confirmed until verified against a fresh, fully-unshallowed clone of `origin/main`** — per standing rule, Naima never trusts a pasted file over a direct repo check, and this file may be stale relative to what's actually deployed. If verification confirms the fix is live: close this item, and confirm `run_gap_handler()` wiring is still correctly *not* auto-triggered (that part remains a separate decision requiring F.B.'s explicit go-ahead, unchanged from v2).
+That check happened today. Pulled `flatline_l1_session.py` and `flatline_l1_lifecycle.py` fresh from `origin/main`, not from context. Confirmed:
+
+- Both `still_broken()` and `neither_worked()` route through the shared `_to_gap()` helper on both observations.
+- `_to_gap()` promotes CANDIDATE→ACTIVE where needed, then calls `mark_gap()`.
+- The state machine's `TRANSITIONS` dict genuinely permits `ACTIVE → GAP` — this isn't a call quietly failing against a disallowed transition, it fires for real.
+
+Item closed. `run_gap_handler()` auto-triggering remains a separate, still-unapproved decision, unchanged from v2 — that's not what this closes.
+
+**New, narrower item opened by this verification:** `mark_gap()` (via `transition()`) raises `ValueError` if called on an observation already in `GAP` status, since `TRANSITIONS['GAP']` only permits `GAP → ACTIVE`. This would surface if a single observation is party to two separate open contradiction flags simultaneously — resolving the second flag would crash rather than no-op gracefully. Narrow edge case, not yet hit in practice, not blocking anything. Logged here so it doesn't get rediscovered from scratch; not yet approved for a fix.
 
 ---
 
