@@ -56,7 +56,7 @@ Each layer has a distinct role. No layer substitutes for another.
 |-------|-------|------|---------|
 | **L1** | true-mem (SQLite) | Short-term working memory. Ebbinghaus forgetting curve — decays unless reinforced. OpenCode plugin. | Short-term memory |
 | **L2** | MemMachine 0.3.6 (Neo4j + Postgres) | Long-term episodic memory. Relational graph. Survives across sessions. Typed facts and relationships. | Long-term memory |
-| **L3** | Qdrant 1.17.1 | Semantic archive. Never forgets, never prioritizes. Vector embeddings. Two collections: knowledge + sessions. | Paper archive |
+| **L3** | Qdrant 1.17.1 | Semantic archive. Never forgets, never prioritizes. Vector embeddings. Single "flatline" collection, scoped by `node_type` payload filtering (SESSION / KNOWLEDGE_NODE) rather than separate collections. | Paper archive |
 
 ### Consolidation — The Missing Piece
 
@@ -374,19 +374,19 @@ curl http://192.168.1.53:8080/health
 
 ## RAG Pipelines
 
-Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to OpenCode via MCP.
+Two separate ingestion pipelines, both terminating in Qdrant's single "flatline" collection (scoped by `node_type`), not separate collections. Both accessible to OpenCode via MCP.
 
 **Pipeline 1 — Personal Knowledge Base**
 - Sources: PDFs, books, notes, recipes, Obsidian vault, everything personal
-- Ingestion tool: TBD (candidates: AnythingLLM, LlamaIndex, custom script)
-- Process: chunked → embedded (Granite 384-dim) → Qdrant collection: `knowledge`
+- Ingestion tool: `flatline_kb_ingest.py` (built, not TBD — see "What's Been Implemented" below)
+- Process: chunked → embedded (Granite 384-dim) → Qdrant "flatline" collection, `node_type: KNOWLEDGE_NODE`, scoped by `owner`
 - Notes live in Obsidian — plain markdown files on disk, ideal RAG format, no export step ever
 
 **Pipeline 2 — AI Session Knowledge**
 - Sources: OpenCode transcripts, curated Claude sessions
 - llm-wiki scope: AI session transcripts only — NOT general documents
-- Tool: Pratiyush/llm-wiki (12-tool MCP server, produces llms.txt + JSON-LD graph)
-- Output: Qdrant collection: `sessions`
+- Tool: Pratiyush/llm-wiki (12-tool MCP server, produces llms.txt + JSON-LD graph) — still pending, see Open Questions & Gaps
+- Output: Qdrant "flatline" collection, `node_type: SESSION`
 - OpenCode can query llm-wiki natively via MCP
 
 ---
@@ -414,7 +414,8 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | Qwen3.6 35B MoE over dense | MoE activates ~3B params per token, full dense would be far slower | VALIDATED |
 | MemMachine over mem0/Zep | Zep Community Edition deprecated April 2025. MemMachine alive and compatible. | VALIDATED |
 | Continue MemMachine, evaluate mem0 later | MemMachine healthy and running. Switch after real usage reveals if Neo4j graph earns its keep. | ACTIVE |
-| Two Qdrant collections | knowledge (personal docs) + sessions (AI transcripts). Same instance, different namespaces. | ACTIVE |
+| Single Qdrant collection ("flatline"), node_type-filtered | Simpler ops, one instance to manage, and enables cross-domain queries (session facts ↔ knowledge nodes) that separate collections would block. Supersedes the earlier "two collections" plan below — that plan was never actually implemented; the codebase went straight to single-collection. | VALIDATED |
+| ~~Two Qdrant collections~~ | ~~knowledge (personal docs) + sessions (AI transcripts). Same instance, different namespaces.~~ SUPERSEDED — see single-collection decision above. This entry was left in the doc long after the code moved on; corrected 2026-07-04. | SUPERSEDED |
 | llama.cpp (llama-server) | Single stack, unified memory optimized. No LM Studio overhead. | VALIDATED |
 | No cloud dependency | Philosophical commitment. Everything runs locally. | ARCHITECTURAL |
 | dry_run mode for crystallization | Guards model swap during testing, prevents OOM crashes. | ACTIVE |
@@ -441,7 +442,7 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 | Question | Context | Priority |
 |----------|---------|----------|
 | Consolidation trigger design | What promotes L1 → L2? Time? Importance score? Both? | HIGH |
-| Pipeline 1 ingestion tool | AnythingLLM vs LlamaIndex vs custom script for personal docs | MEDIUM |
+| Pipeline 1 ingestion tool | ~~AnythingLLM vs LlamaIndex vs custom script~~ — `flatline_kb_ingest.py` built, standalone, owner-scoped. See "What's Been Implemented." | RESOLVED |
 | llm-wiki OpenCode adapter | Does llm-wiki pick up OpenCode transcripts or need path tweak? | MEDIUM |
 | mem0ai OpenMemory evaluation | After real MemMachine usage: does Neo4j graph earn its keep? | LOW (defer) |
 | Remote access frontend | Tailscale confirmed. Frontend: LobeHub self-hosted or custom? | LOW (later) |
@@ -565,14 +566,14 @@ Two separate ingestion pipelines, both terminating in Qdrant. Both accessible to
 
 ### Medium Priority
 
-6. **llm-wiki install and session ingestion** → Qdrant collection: `sessions`
-7. **Document ingestion pipeline** (tool TBD) → Qdrant collection: `knowledge` — DONE
+6. **llm-wiki install and session ingestion** → Qdrant "flatline" collection, `node_type: SESSION`
+7. **Document ingestion pipeline** (`flatline_kb_ingest.py`, not TBD) → Qdrant "flatline" collection, `node_type: KNOWLEDGE_NODE` — DONE
 8. **Observation threshold trigger** — hot session, 20+ observations (in spec, not in code)
 9. **Nightly sweep** — scheduled maintenance trigger (in spec, not in code)
 10. **Decay check trigger** — routine confidence audit (sweep code exists, trigger not wired)
 11. **Performance tuning** — optimize L3 pipeline throughput and Ebbinghaus curve parameters
 12. **Document reader tools** (read_document, ingest_document) — DONE
-13. **Session history retrieval** (query_sessions) — semantic search against sessions Qdrant collection
+13. **Session history retrieval** (query_sessions) — semantic search against the "flatline" collection, filtered to `node_type: SESSION`
 
 ### Low Priority
 
