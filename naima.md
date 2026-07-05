@@ -1,5 +1,5 @@
 # naima.md
-version: 7
+version: 8
 updated: 2026-07-05 AZT
 
 Architect's spec. Naima (Claude) writes this; F.B. commits it; Dixie reads it at session start. This overrides Dixie's own judgment on architectural questions. If something here conflicts with AGENTS.md on a behavioral rule, AGENTS.md wins for mechanics — this file is for design decisions and standing instructions, not session command syntax.
@@ -16,21 +16,15 @@ Background: `_git_commit_handoff_files()` previously only fired inside the sign-
 
 **Addendum (2026-06-21): push immediately after every commit.** Found in practice on 2026-06-21 — several commits sat local-only for 2+ weeks because nobody ran `git push` after committing. The commits were fine; the push step was just never run. Run `git push` as the last step of every commit, automatically, without being asked. Verify it landed — `git log --oneline -1 origin/main` should match local HEAD — before considering any task done.
 
+**STILL OPEN as of v7/v8: `_git_commit_handoff_files()` in `flatline_mcp_server.py` still calls `git add -A`, not scoped named-file adds.** v7 logged this as fixed. It is not fixed in the code Naima has seen most recently. Do not trust the "fixed" claim until verified fresh against `origin/main`. Flag to F.B. before treating this as closed.
+
 ---
 
-## GAP chain — CONFIRMED FIXED (2026-07-05)
+## GAP chain — status check needed (2026-06-21, revisit)
 
-Closing this out. v2 flagged `neither_worked()` for missing its `mark_gap()` call. v6 noted it *looked* fixed but explicitly withheld confirmation pending a check against a fresh, unshallowed `origin/main` clone rather than a pasted file.
+naima.md v2 flagged `neither_worked()` as missing its `mark_gap()` call. Current repo copy of `flatline_l1_session.py` (reviewed 2026-06-30) shows both `still_broken()` and `neither_worked()` calling a shared `_to_gap()` helper on both observations, which promotes CANDIDATE→ACTIVE→GAP correctly. This looks fixed.
 
-That check happened today. Pulled `flatline_l1_session.py` and `flatline_l1_lifecycle.py` fresh from `origin/main`, not from context. Confirmed:
-
-- Both `still_broken()` and `neither_worked()` route through the shared `_to_gap()` helper on both observations.
-- `_to_gap()` promotes CANDIDATE→ACTIVE where needed, then calls `mark_gap()`.
-- The state machine's `TRANSITIONS` dict genuinely permits `ACTIVE → GAP` — this isn't a call quietly failing against a disallowed transition, it fires for real.
-
-Item closed. `run_gap_handler()` auto-triggering remains a separate, still-unapproved decision, unchanged from v2 — that's not what this closes.
-
-**New, narrower item opened by this verification:** `mark_gap()` (via `transition()`) raises `ValueError` if called on an observation already in `GAP` status, since `TRANSITIONS['GAP']` only permits `GAP → ACTIVE`. This would surface if a single observation is party to two separate open contradiction flags simultaneously — resolving the second flag would crash rather than no-op gracefully. Narrow edge case, not yet hit in practice, not blocking anything. Logged here so it doesn't get rediscovered from scratch; not yet approved for a fix.
+**Do not treat this as confirmed until verified against a fresh, fully-unshallowed clone of `origin/main`** — per standing rule, Naima never trusts a pasted file over a direct repo check, and this file may be stale relative to what's actually deployed. If verification confirms the fix is live: close this item, and confirm `run_gap_handler()` wiring is still correctly *not* auto-triggered (that part remains a separate decision requiring F.B.'s explicit go-ahead, unchanged from v2).
 
 ---
 
@@ -79,3 +73,27 @@ One node type. The decision of "rate vs procedure" is made per-chunk at extracti
 **Ingestion tooling (2026-06-30):** Open Notebook (self-hosted, MIT-licensed, `lfnovo/open-notebook`) is the approved extraction workbench for staging library content before it hits the ingestion pipeline. Point its model provider at Dixie's existing llama-server endpoint (port 1235) rather than a cloud provider — this keeps the no-cloud-runtime commitment intact, since Open Notebook supports local model backends via the same Ollama-compatible interface. Its REST API (localhost:5055) makes this scriptable rather than manual-click-through, unlike NotebookLM (no public API, cloud-only, evaluated and rejected 2026-06-30 for this reason). Open Notebook itself is **not** part of the runtime system — it is prep tooling. Its job ends at producing structured extracts (flat JSON/CSV matching the KnowledgeNode fields above); those extracts land in the repo as files, and the actual ingestion script reads from disk like any other source. Do not wire Open Notebook into the live ingestion path as a standing dependency.
 
 **Open, not yet decided:** hot-folder watcher mechanics, batching size/throttle, whether `ingest_document` (existing raw chunker in flatline_mcp_server.py) gets extended or replaced outright. Do not assume the existing `ingest_document` tool is reusable as-is — it currently has no schema awareness, no dedup, no graph write. Treat it as a reference implementation for the chunking/OCR plumbing only.
+
+---
+
+## Chain of command & feedback routine (2026-07-05, status: LOCKED)
+
+**The lane assignments, stated once so nobody "forgets":**
+
+- **Naima (Claude, claude.ai)** — architecture and judgment. Writes `naima.md`. Cannot commit to git — F.B. is the hands. This file is Naima's domain, full stop. No other layer edits it, proposes edits into it, or treats its own reasoning as equivalent to it.
+- **Antigravity (Sonnet/Opus/Gemini via F.B.'s Google AI Pro)** — the token-budget workhorse. Pulls `naima.md` from `origin/main` directly — never from a paste, never secondhand. Takes Naima's decisions and works out implementation detail at a scale Naima's free-tier context can't afford. Hands worked-out instructions to Dixie.
+- **Dixie (local, port 1235)** — execution. Free, local, fast. Does what Antigravity hands it, reports back.
+- **Obsidian** — a window onto the repo. Not a source of truth. Nobody edits architecture through it.
+
+**Authority rule:** bigger context window is not bigger authority. If Antigravity's own reasoning appears to conflict with a locked `naima.md` decision, it does not resolve the conflict itself and proceed. It flags upward. Same principle AGENTS.md already applies to Dixie's task-vs-naima.md divergence (see "Run this first" section) — now explicitly extended to Antigravity.
+
+**Feedback routine — reuses the existing `hand_off()` schema, does not fork a new one:**
+
+1. Dixie executes, reports results back to Antigravity.
+2. Antigravity translates that report into the *same* four-section schema `hand_off()` already produces: What Changed / What's Broken / Decisions Made / Needs Naima. No new format, no prose-only summary.
+3. New required field: **`reported_by`** on every entry — distinguishes Antigravity's own self-reported narrative from anything Dixie logged directly to TrueMem/L1 or Neo4j. Self-reported and independently-observed are different trust tiers and the file has to say which is which.
+4. `git diff --stat` stays machine-generated and non-negotiable, sitting *next to* the prose brief, never replaced by it. A mismatch between what the brief claims and what the diff shows is exactly the signal Naima needs.
+5. Antigravity commits its brief and any code changes as **separate, scoped commits** — same git hygiene rule already locked for everyone else. Brief and diff must be independently attributable.
+
+**Why:** a report written by the same layer that did the work has a structural honesty problem, not a malicious one — nobody narrates their own execution as "I misread the spec." Cross-checking against an independent diff is the only thing that catches it. This is the same reasoning that made `hand_off()` pull from three sources instead of trusting any single one; extending it to Antigravity is consistency, not new suspicion.
+

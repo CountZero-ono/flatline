@@ -1,0 +1,2 @@
+# OKF Auto-Update Rule
+Whenever we complete a complex task, fix a major bug, or make an architectural decision, you MUST automatically update the OKF file located at `.knowledge/flatline_architecture.md` before ending the session. Do not wait for me to use the /learn command. Extract the context and write it to the file using your file editing tools.
