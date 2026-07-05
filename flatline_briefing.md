@@ -1,24 +1,20 @@
 # Flatline Briefing
-_Session: 66050616-fb23-4c3e-af53-4405bc1b6ce0 — 2026-06-03 — Set up llama-pi.service (Qwen 3.5 9B MTP, port 1239), pi-launch.sh, Pi agent config, and SUPER SHIFT+P keybinding; noted flatline deployment reverted to service-based startup_
+_Session: 66050616-fb23-4c3e-af53-4405bc1b6ce0 — 2026-06-29 — Session start — naima.md v5 loaded, checking for pending tasks_
 
 ---
 
 ## What Changed
 ### TrueMem (L1 observations)
-- No observations recorded this session.
+- TRANSIENT: naima_md_version = 2
+- TRANSIENT: naima_md_version = 2 (loaded at session start 2026-06-21)
 
 ### MemMachine (L2 nodes changed)
 - Neo4j query failed.
 
 ### git diff --stat (file changes)
-- AGENTS.md                   |  27 ++--
-- flatline_briefing.md        |  15 ++-
-- flatline_crystallize_run.sh |   6 +-
-- flatline_decisionsPi.md     |  38 +++---
-- flatline_l3_query.py        |   2 +-
-- flatline_mcp_server.py      | 302 ++++++++++++++++++++++++++++++--------------
-- flatline_summary.md         |  39 ++++--
-- 7 files changed, 286 insertions(+), 143 deletions(-)
+- .opencode/agents/dixie.md |  2 +-
+- naima.md                  | 24 ++++++++++++++++++++++--
+- 2 files changed, 23 insertions(+), 3 deletions(-)
 
 ---
 
