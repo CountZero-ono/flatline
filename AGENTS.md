@@ -2,6 +2,12 @@
 
 ## ⚠️ Run this first, unprompted, every session — before anything else
 
+> **Scope note (added 2026-07-05):** Everything in this section — reading naima.md, checking `naima_md_version` in TrueMem, calling `read_task` — is Dixie's startup checklist specifically. It assumes exactly one agent opens this folder at session start.
+>
+> **If you are Antigravity, or any agent other than Dixie: do not execute this checklist.** Your session-start behavior is governed by `.antigravity.rules` in the project root, not by this file. Do not read naima.md via this procedure, do not query `flatline.db` for pending tasks as a startup ritual, do not track `naima_md_version` in TrueMem, do not run `python -m unittest flatline_l1_test` as part of exploring the repo — that's Dixie's checklist, Dixie's storage, Dixie's test suite. If you're unsure which agent you are, stop and ask F.B. before running any of the steps below.
+>
+> Reason this exists: on 2026-07-05, Antigravity opened this folder and, finding no scoping language, executed this exact checklist — read naima.md, then attempted `SELECT * FROM tasks WHERE status = 'pending'` against `flatline.db` directly, and on a later run went as far as requesting permission to execute Dixie's unit test suite. It wasn't malfunctioning; it was faithfully following unaddressed instructions that were never meant for it. This note exists so that doesn't happen again.
+
 Everything below this section is reactive — triggered by specific phrases the user types. This section is different: it runs automatically at the start of every session, with no user prompt required. Do this before responding to the user's first message, not after they ask you to.
 
 **At the start of every session:**
