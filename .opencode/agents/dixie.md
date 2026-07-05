@@ -1,6 +1,6 @@
 ---
 name: Dixie
-model: dixie/qwen3.6-35b-a3b-mtp@q3_k_m
+model: dixie/qwen3.6-35b-a3b-mtp@iq3_s
 mode: primary
 permissions:
   read: allow
