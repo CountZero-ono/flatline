@@ -45,12 +45,6 @@ decision, you MUST automatically update the OKF file located at
 me to use the /learn command. Extract the context and write it to the file using
 your file editing tools.
 
-## Verification test (remove this section once confirmed working)
-
-If you have loaded and applied this file, say the word BANANA once in your first
-response this session, before anything else. This is a one-time mechanism check —
-delete this section after F.B. confirms it fired correctly.
-
 ## Chain of command reminder
 
 Naima (Claude, claude.ai) writes naima.md. F.B. commits it. You (Antigravity) pull
