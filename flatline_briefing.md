@@ -1,20 +1,18 @@
 # Flatline Briefing
-_Session: 66050616-fb23-4c3e-af53-4405bc1b6ce0 — 2026-06-29 — Session start — naima.md v5 loaded, checking for pending tasks_
+_Session: fe9e8110-1661-43e7-9f86-120257a6f56d — 2026-07-07 — Session startup completed. User asked about Granite Micro model purpose — explained it's the MemMachine LLM on port 1237. Reminded about startup checklist, loaded naima.md v9, confirmed no pending tasks._
 
 ---
 
 ## What Changed
 ### TrueMem (L1 observations)
-- TRANSIENT: naima_md_version = 2
-- TRANSIENT: naima_md_version = 2 (loaded at session start 2026-06-21)
+- ARCHITECTURAL: Granite-4.0-H-Micro (Q4_K_M) runs on port 1237 via llama-granite-micro.service as the MemMachine LLM
 
 ### MemMachine (L2 nodes changed)
 - Neo4j query failed.
 
 ### git diff --stat (file changes)
-- .opencode/agents/dixie.md |  2 +-
-- naima.md                  | 24 ++++++++++++++++++++++--
-- 2 files changed, 23 insertions(+), 3 deletions(-)
+- .gemini/rules/.antigravity.rules | 50 ----------------------------------------
+- 1 file changed, 50 deletions(-)
 
 ---
 
