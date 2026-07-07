@@ -1,6 +1,6 @@
 # naima.md
-version: 8
-updated: 2026-07-05 AZT
+version: 9
+updated: 2026-07-08 AZT
 
 Architect's spec. Naima (Claude) writes this; F.B. commits it; Dixie reads it at session start. This overrides Dixie's own judgment on architectural questions. If something here conflicts with AGENTS.md on a behavioral rule, AGENTS.md wins for mechanics — this file is for design decisions and standing instructions, not session command syntax.
 
@@ -16,7 +16,7 @@ Background: `_git_commit_handoff_files()` previously only fired inside the sign-
 
 **Addendum (2026-06-21): push immediately after every commit.** Found in practice on 2026-06-21 — several commits sat local-only for 2+ weeks because nobody ran `git push` after committing. The commits were fine; the push step was just never run. Run `git push` as the last step of every commit, automatically, without being asked. Verify it landed — `git log --oneline -1 origin/main` should match local HEAD — before considering any task done.
 
-**STILL OPEN as of v7/v8: `_git_commit_handoff_files()` in `flatline_mcp_server.py` still calls `git add -A`, not scoped named-file adds.** v7 logged this as fixed. It is not fixed in the code Naima has seen most recently. Do not trust the "fixed" claim until verified fresh against `origin/main`. Flag to F.B. before treating this as closed.
+**CLOSED as of v9 (2026-07-08).** v7's "fixed" claim turned out to be premature, and v8 correctly refused to trust it — but v8 itself was going on a pasted copy, not a fresh pull. Verified directly against `origin/main` on 2026-07-08: `_git_commit_handoff_files()` stages `HANDOFF_OWNED_FILES` (currently just `flatline_briefing.md`) by name — `["git", "add", *existing]` — not `-A`. Closing per the standing rule: empirical outcome against origin closes the item, not another round of someone's say-so.
 
 ---
 
@@ -24,7 +24,7 @@ Background: `_git_commit_handoff_files()` previously only fired inside the sign-
 
 naima.md v2 flagged `neither_worked()` as missing its `mark_gap()` call. Current repo copy of `flatline_l1_session.py` (reviewed 2026-06-30) shows both `still_broken()` and `neither_worked()` calling a shared `_to_gap()` helper on both observations, which promotes CANDIDATE→ACTIVE→GAP correctly. This looks fixed.
 
-**Do not treat this as confirmed until verified against a fresh, fully-unshallowed clone of `origin/main`** — per standing rule, Naima never trusts a pasted file over a direct repo check, and this file may be stale relative to what's actually deployed. If verification confirms the fix is live: close this item, and confirm `run_gap_handler()` wiring is still correctly *not* auto-triggered (that part remains a separate decision requiring F.B.'s explicit go-ahead, unchanged from v2).
+**CLOSED as of v9 (2026-07-08).** Verified directly against `origin/main`: both `still_broken()` and `neither_worked()` call the shared `_to_gap()` helper on both observations, which calls `mark_gap()` — CANDIDATE→ACTIVE→GAP fires correctly. Also confirmed in the same pass: `run_gap_handler()` (in `flatline_gap_handler.py`) still has zero callers anywhere in the codebase — correctly *not* auto-triggered. That remains a separate decision requiring F.B.'s explicit go-ahead, unchanged from v2.
 
 ---
 
@@ -97,3 +97,17 @@ One node type. The decision of "rate vs procedure" is made per-chunk at extracti
 
 **Why:** a report written by the same layer that did the work has a structural honesty problem, not a malicious one — nobody narrates their own execution as "I misread the spec." Cross-checking against an independent diff is the only thing that catches it. This is the same reasoning that made `hand_off()` pull from three sources instead of trusting any single one; extending it to Antigravity is consistency, not new suspicion.
 
+
+---
+
+## Housekeeping close-out & AGENTS_addition.md removal (2026-07-08)
+
+`dixie_housekeeping_task.md` is deleted — all three items it tracked are resolved:
+
+1. **Stale `sign_out` MCP tool / `flatline_session_close.py`** (the retired 27B-swap dead code) — confirmed gone. `flatline_session_close.py` 404s against `origin/main`; no `sign_out` tool definition remains in `flatline_mcp_server.py`. One sign-off path only (`sign_off`), as intended.
+2. **GAP triggering** — confirmed firing (see GAP chain entry above).
+3. **`run_gap_handler()` wiring** — confirmed still orphaned by design, not a bug (see GAP chain entry above).
+
+`AGENTS_addition.md` is also deleted, not patched. It did contain a real bug — it told Dixie to write `naima_md_version` via the literal phrase "remember this: naima_md_version = {version}," which collides with `AGENTS.md`'s hard rule that "remember this" must never trigger a tool call (reserved for TrueMem's passive auto-capture). But nothing in the repo actually loaded or referenced `AGENTS_addition.md` — not `AGENTS.md`, not `.antigravity.rules`, not `flatline_mcp_server.py`. Its content duplicated `AGENTS.md`'s own "Run this first" section almost verbatim, and that section already had the correct instruction. It was orphaned scaffolding, not a live doc — deletion removes the contradiction by removing the duplicate. The underlying requirement (track `naima_md_version` in TrueMem, written via explicit tool call, never via "remember this") remains correctly specified in `AGENTS.md`, unchanged.
+
+**Still open, unverified:** `bench_real.sh` — not found at repo root or a set of guessed subdirectory paths; `api.github.com` rate-limited from the verifying sandbox so the tree couldn't be browsed directly. Needs F.B. to supply the path, confirm it's local-only/renamed/removed, or a retry once the rate limit clears.
